@@ -11,6 +11,8 @@ Ferramenta para avaliação e ranking de governança corporativa de empresas bra
 2. Campos preenchidos manualmente pelo analista (critérios qualitativos)
 3. Dados extraídos do estatuto social (cláusulas específicas)
 
+**Objetivo central (confirmado 2026-07-03):** o critério de sucesso real do projeto é conseguir extrair automaticamente, para QUALQUER empresa listada na B3, os dados do FRE (Formulário de Referência) e do Estatuto Social — não só reprocessar a planilha das 10 empresas de exemplo. O motor de scoring por si só tem valor limitado sem essa automação de sourcing. Ao priorizar próximos passos, priorizar sempre o que aproxima dessa automação.
+
 ---
 
 ## Arquitetura atual (Python puro — fase 1)
@@ -76,6 +78,7 @@ O motor foi calibrado contra as 10 empresas de exemplo da planilha:
 **Issues conhecidos:**
 - **Itausa Conselho (-4pts):** analista usou nota estrutura 3 para 8 membros, mas o Guia define nota 2 para 8 membros. Divergência de interpretação humana — não automatizável.
 - **BTG/Bradesco/BB (~1pt na Diretoria):** subcritério ainda não identificado. Diferença mínima, não prioritário.
+- **Bradesco divergiu mais em 2026-07-03** (motor deu 46.0 rodando localmente, vs 48.0 registrado acima): a planilha copiada para esta máquina pode ser uma versão mais recente/atualizada que a usada na calibração original. Não é bug de código (as outras 9 empresas bateram exato) — fica para revisão quando os critérios forem reavaliados.
 
 **Correções importantes já aplicadas:**
 - Parser busca `% Remuneração Fixa` da **Diretoria** (2ª ocorrência na planilha, `campo_nth(n=1)`), não do Conselho
@@ -154,16 +157,20 @@ Ficha por membro com: nome, CPF, experiência profissional, órgão, cargo eleti
 
 ---
 
-## Tabelas do BigQuery (a mapear)
+## Acesso a dados da CVM (investigado em 2026-07-03)
 
-Quando houver acesso ao BigQuery, as tabelas do FRE provavelmente seguem o padrão `fre_cia_aberta_*`. Seções prioritárias:
-- Seção 6.1/2 → tabela de posição acionária
-- Seção 1.13 → tabela de acordos de acionistas
-- Seção 7.1D → tabela de composição dos órgãos
-- Seção 7.3 → tabela de membros da administração
-- Seção 7.4 → tabela de composição dos comitês
+**BigQuery interno da LEQ:** hipótese de tabela `cvm.fre_cia_aberta` repassada pelo usuário, mas **não confirmada nem descartada** — nenhuma ferramenta de BigQuery genérica esteve acessível na sessão de investigação (a skill `leblon-bigquery` existe, mas as tools não estavam conectadas). Precisa de alguém com acesso real ao console GCP para verificar se a tabela existe e o que ela cobre. Se existir, é provável que seja uma família de tabelas por seção (`fre_cia_aberta_<secao>`), não uma tabela única — é assim que a CVM organiza os dados oficialmente (ver abaixo).
 
-**Pendente:** confirmar nomes exatos das tabelas. Consultar a skill `leblon-bigquery` antes de qualquer query.
+**Caminho público confirmado e funcional (independe do BigQuery):** portal de dados abertos `https://dados.cvm.gov.br/`, sem autenticação.
+- **FRE estruturado:** `https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/FRE/DADOS/fre_cia_aberta_AAAA.zip` — um ZIP por ano-base (2010–2026 disponíveis), contendo dezenas de CSVs internos, um por seção do Anexo 24/Resolução CVM 80/22, cobrindo todas as companhias abertas daquele ano (cada linha tem `CNPJ_CIA` para filtrar por empresa). Dicionário de dados: `https://dados.cvm.gov.br/dataset/cia_aberta-doc-fre/resource/4ffa636e-95a3-48ac-979c-7396213930ff`.
+  - Seções 7.1D, 7.3, 7.4 têm cobertura razoável nos CSVs.
+  - Seções 6.1/2 (posição acionária) e 1.13 (acordo de acionistas) ainda não confirmadas arquivo a arquivo — mapear ao inspecionar o zip.
+- **Estatuto Social NÃO está no FRE.** Fica no dataset **IPE** (Informações Periódicas e Eventuais): `https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/IPE/DADOS/ipe_cia_aberta_AAAA.zip` — um índice CSV de metadados de documentos por empresa/tipo/data; o PDF do estatuto é baixado separadamente a partir desse índice (alternativa manual: sistema RAD/ENET `https://www.rad.cvm.gov.br/ENET/frmConsultaExternaCVM.aspx`).
+- Não existe API REST oficial da CVM — é sempre download de arquivo estático (ZIP/CSV/PDF).
+
+**Conclusão:** o objetivo central (extrair FRE + Estatuto de qualquer empresa) é viável hoje via `dados.cvm.gov.br`, independente de resolver o BigQuery interno. O BigQuery, se existir e estiver populado, seria um atalho mais limpo, mas não é bloqueante — pode ser feito em paralelo.
+
+**Pendente (próxima sessão):** baixar `fre_cia_aberta_2025.zip` (~8.1MB, ainda não baixado — aguardando confirmação do usuário) para inspecionar os CSVs reais e mapear seções 6.1/2 e 1.13.
 
 ---
 
@@ -177,13 +184,23 @@ Quando houver acesso ao BigQuery, as tabelas do FRE provavelmente seguem o padr�
 
 ---
 
-## Próximos passos (ordem sugerida)
+## Próximos passos (ordem sugerida, atualizada 2026-07-03)
 
-1. **Mapear tabelas do BigQuery** — identificar nomes exatos das tabelas do FRE para as seções 6 e 7
-2. **Módulo `bq_client.py`** — função que dado um ticker/CNPJ busca os campos automáticos no BigQuery
-3. **Interface de input manual** — formulário para o analista preencher os campos qualitativos
-4. **Módulo `estatuto_parser.py`** — usar Claude API para ler estatuto em PDF e extrair campos booleanos
-5. **Integrar tudo em `main.py`** — pipeline completo: BigQuery + input manual + estatuto → nota final
-6. **API Flask** — expor o motor como endpoint HTTP
-7. **MCP Server** — ferramentas para o Claude usar diretamente
-8. **Dashboard React** — interface visual para analistas
+1. **Confirmar acesso ao BigQuery da LEQ** (`cvm.fre_cia_aberta` ou equivalente) — em paralelo, feito pelo usuário fora do Claude Code
+2. **Prototipar módulo de download/parsing do FRE via `dados.cvm.gov.br`** — baixar `fre_cia_aberta_AAAA.zip`, inspecionar CSVs reais, mapear seções 6.1/2 e 1.13 que ainda faltam confirmar
+3. **Módulo `cvm_client.py`** (nome provisório) — dado um CNPJ, retorna os campos automáticos do FRE, seja via BigQuery (se confirmado) ou via CSVs baixados da CVM
+4. **Interface de input manual** — formulário para o analista preencher os campos qualitativos
+5. **Módulo `estatuto_parser.py`** — baixar PDF do estatuto via índice IPE da CVM, usar Claude API para extrair campos booleanos (poison pill, limite de voto, limite de dividendo)
+6. **Integrar tudo em `main.py`** — pipeline completo: CVM (FRE + estatuto) + input manual → nota final
+7. **API Flask** — expor o motor como endpoint HTTP
+8. **MCP Server** — ferramentas para o Claude usar diretamente
+9. **Dashboard React** — interface visual para analistas
+
+---
+
+## Status do ambiente local (atualizado 2026-07-03)
+
+- Repositório Git local inicializado, conectado ao remoto `https://github.com/bpereira1974/governanca-corporativa` (branch `main`). Push ainda não realizado — só local até confirmação explícita.
+- Python 3.12.10 instalado (via winget, fonte oficial Python Software Foundation). Ambiente virtual em `venv/` na raiz do projeto (ignorado no Git), dependências do `requirements.txt` instaladas e testadas.
+- `data/Template_Governança.xlsx` presente localmente (ignorado no Git — nunca commitar planilhas com dados).
+- `main.py` roda com sucesso via `venv\Scripts\python.exe src\main.py`.
