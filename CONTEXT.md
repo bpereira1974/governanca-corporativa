@@ -187,14 +187,29 @@ Ficha por membro com: nome, CPF, experiência profissional, órgão, cargo eleti
 ## Próximos passos (ordem sugerida, atualizada 2026-07-03)
 
 1. **Confirmar acesso ao BigQuery da LEQ** (`cvm.fre_cia_aberta` ou equivalente) — em paralelo, feito pelo usuário fora do Claude Code
-2. **Prototipar módulo de download/parsing do FRE via `dados.cvm.gov.br`** — baixar `fre_cia_aberta_AAAA.zip`, inspecionar CSVs reais, mapear seções 6.1/2 e 1.13 que ainda faltam confirmar
-3. **Módulo `cvm_client.py`** (nome provisório) — dado um CNPJ, retorna os campos automáticos do FRE, seja via BigQuery (se confirmado) ou via CSVs baixados da CVM
-4. **Interface de input manual** — formulário para o analista preencher os campos qualitativos
-5. **Módulo `estatuto_parser.py`** — baixar PDF do estatuto via índice IPE da CVM, usar Claude API para extrair campos booleanos (poison pill, limite de voto, limite de dividendo)
-6. **Integrar tudo em `main.py`** — pipeline completo: CVM (FRE + estatuto) + input manual → nota final
-7. **API Flask** — expor o motor como endpoint HTTP
-8. **MCP Server** — ferramentas para o Claude usar diretamente
-9. **Dashboard React** — interface visual para analistas
+2. ~~Prototipar parser do capítulo 7 (administração) direto do PDF do FRE~~ — **feito**, ver `src/fre_pdf_parser.py` abaixo
+3. **Prototipar módulo de download/parsing do FRE via `dados.cvm.gov.br`** — baixar `fre_cia_aberta_AAAA.zip`, inspecionar CSVs reais, mapear seções 6.1/2 e 1.13 que ainda faltam confirmar
+4. **Módulo `cvm_client.py`** (nome provisório) — dado um CNPJ, retorna os campos automáticos do FRE, seja via BigQuery (se confirmado) ou via CSVs baixados da CVM
+5. **Interface de input manual** — formulário para o analista preencher os campos qualitativos
+6. **Módulo `estatuto_parser.py`** — baixar PDF do estatuto via índice IPE da CVM, usar Claude API para extrair campos booleanos (poison pill, limite de voto, limite de dividendo)
+7. **Integrar tudo em `main.py`** — pipeline completo: CVM (FRE + estatuto) + input manual → nota final
+8. **API Flask** — expor o motor como endpoint HTTP
+9. **MCP Server** — ferramentas para o Claude usar diretamente
+10. **Dashboard React** — interface visual para analistas
+
+---
+
+## Parser do FRE em PDF (`src/fre_pdf_parser.py`, prototipado 2026-07-03)
+
+Enquanto o caminho via BigQuery/CSV da CVM não está confirmado, prototipamos um parser que le' o **PDF do FRE diretamente** (o formato que os analistas já têm em mãos) e extrai a estrutura do capítulo 7 (administração). Validado ponta a ponta contra o FRE real da Cyrela (2026, Versão 4, páginas 121–165):
+
+- **Biblioteca:** `pdfplumber` (puro Python, sem depender de binário externo como `poppler`/`pdftotext` — mais fácil de empacotar num deploy futuro no Cloud Run)
+- **O que extrai:** contagem de membros por órgão (7.1D), lista de membros com currículo resumido e órgão/mandato/tenure (7.3), e composição dos comitês (7.4)
+- **Resultado da validação:** 22/22 membros classificados corretamente por órgão (10 Conselho, 6 Diretoria, 3+3 Conselho Fiscal efetivo/suplente), datas de início de mandato batendo 100% com leitura manual, e os 3 comitês (Auditoria Estatutário, Estratégia e Finanças, Pessoas e Sustentabilidade) identificados com o membro certo em cada um
+- **Armadilha de parsing descoberta:** o `pdfplumber` (e o `pdftotext`, testado antes) preserva o layout físico linha a linha — quando uma célula de tabela quebra em várias linhas, cada linha física contém fragmentos de **todas** as colunas daquele "andar", então não dá pra simplesmente colapsar quebras de linha e buscar por frases inteiras (ex: "Conselho de Administração" pode aparecer com "Conselho de" numa linha e "Administração" bem mais adiante, intercalada com texto de outras colunas). A solução foi ancorar regex no início de cada linha física e usar heurísticas estruturais (ex: a linha do "Comitê de Auditoria" sempre vem antes de qualquer linha "Outros Comitês")
+- **Achado real (não é bug):** tanto Elie Horn quanto Rogério Frota Melzi aparecem como "Presidente do Conselho de Administração" na Cyrela — parece ser uma estrutura de co-presidência do conselho (espelhando os Co-Presidentes da Diretoria)
+- **Limitação conhecida:** a extração é específica ao layout deste FRE (Cyrela); outras empresas podem ter variações de formatação que quebrem as heurísticas — precisa validar contra mais de uma empresa antes de confiar no parser em produção
+- **Dependência nova:** `pdfplumber==0.11.4` no `requirements.txt`
 
 ---
 
