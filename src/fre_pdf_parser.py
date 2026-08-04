@@ -25,6 +25,70 @@ def _clean_text(text):
     return text
 
 
+_CHAPTER7_START_RE = re.compile(r"7\.1\s+Principais\s+características")
+# paramos no que vier primeiro: inicio do capitulo 8, ou da secao 7.5 (que
+# nao nos interessa e pode ser bem longa — visto na Estapar, cuja 7.6 tem
+# dezenas de paginas e inflava demais o intervalo se so' parassemos no 8.1)
+_CHAPTER7_END_RE = re.compile(r"^\s*(?:8\.1\b|7\.5\s+Relações familiares)", re.MULTILINE)
+
+
+def find_chapter7_page_range(pdf_path):
+    """Localiza automaticamente as paginas do capitulo 7 (estrutura de
+    administracao) do FRE, escaneando o texto de cada pagina por cabecalhos
+    de secao ("7.1 Principais características..." / "8.1 ..."). A numeracao
+    das secoes e' padronizada pelo Anexo B da Resolução CVM 80/22, entao vale
+    pra qualquer companhia aberta, nao so' as ja' testadas.
+
+    Retorna (page_start, page_end), 1-indexados e inclusivos, prontos pra
+    passar direto pra extract_section_text/parse_administration_structure.
+    """
+    try:
+        start_page = None
+        end_page = None
+        with pdfplumber.open(pdf_path) as pdf:
+            for i, page in enumerate(pdf.pages):
+                text = page.extract_text() or ""
+                lines = [l for l in text.split("\n") if l.strip()]
+                # a pagina de indice tambem lista "7.1 Principais
+                # características..." como item de sumario — o que distingue
+                # uma pagina de CONTEUDO real e' que ela repete o cabecalho
+                # da secao atual bem no topo (2a linha nao-vazia, logo apos
+                # o titulo "Formulário de Referência..."), enquanto o indice
+                # tem "Índice" nessa posicao
+                header = lines[1] if len(lines) > 1 else ""
+                if start_page is None:
+                    if _CHAPTER7_START_RE.match(header.strip()):
+                        start_page = i + 1
+                    continue
+                if _CHAPTER7_END_RE.match(header.strip()):
+                    end_page = i  # a pagina anterior ja' e' a ultima do capitulo 7
+                    break
+
+        if start_page is None:
+            raise ValueError(
+                "Não foi possível localizar a seção 7.1 do FRE neste PDF — "
+                "verifique se é de fato um Formulário de Referência da CVM"
+            )
+        if end_page is None:
+            # nao achou o inicio do capitulo 8 (formatacao atipica); usa uma
+            # janela generosa a partir do inicio do capitulo 7
+            end_page = start_page + 60
+
+        custom_log(
+            msg=f"Capítulo 7 localizado nas páginas {start_page}-{end_page} de {pdf_path}",
+            component="/fre_pdf_parser/find_chapter7_page_range",
+            severity="INFO",
+        )
+        return start_page, end_page
+    except Exception as e:
+        custom_log(
+            msg=traceback.format_exception(e),
+            component="/fre_pdf_parser/find_chapter7_page_range",
+            severity="CRITICAL",
+        )
+        raise
+
+
 def extract_section_text(pdf_path, page_start, page_end):
     """Extrai e concatena o texto (layout preservado) de um intervalo de paginas.
 
@@ -360,7 +424,9 @@ def parse_administration_structure(pdf_path, page_start, page_end):
             r"7\.3 Composição e experiências profissionais(.*?)(?:7\.4 Composição dos comitês|\Z)",
             text,
         ) or ""
-        secao_74 = _field(r"7\.4 Composição dos comitês(.*)", text) or ""
+        secao_74 = _field(
+            r"7\.4 Composição dos comitês(.*?)(?:7\.5\s+Relações familiares|\Z)", text
+        ) or ""
 
         result = {
             "contagem_por_orgao": parse_7_1d_counts(text),
