@@ -9,7 +9,7 @@ import traceback
 
 import pdfplumber
 
-from utils.logging_utils import custom_log
+from src.utils.logging_utils import custom_log
 
 _PAGE_FOOTER_RE = re.compile(r"P[ÁA]GINA:\s*\d+\s*de\s*\d+")
 _HEADER_RE = re.compile(r"Formulário de Referência.*?Versão\s*:\s*\d+\s*\n?")
@@ -17,6 +17,32 @@ _HEADER_RE = re.compile(r"Formulário de Referência.*?Versão\s*:\s*\d+\s*\n?")
 _MEMBER_START_RE = re.compile(
     r"Nome:?\s+(?P<nome>[A-ZÀ-Ü][A-ZÀ-Ü'\.\s]+?)\s+CPF:\s*(?P<cpf>[\d\.\-/]+)"
 )
+
+_COMPANY_NAME_RE = re.compile(
+    r"Formulário de Referência\s*-?\s*(?:\d{2}/\d{2}/)?\d{4}\s*-\s*(.+?)\s*Versão\s*:",
+    re.IGNORECASE,
+)
+
+
+def extract_company_name(pdf_path):
+    """Extrai o nome da companhia do cabecalho repetido em todas as paginas
+    do FRE (ex: "Formulário de Referência - 2026 - CYRELA BRAZIL REALTY
+    S.A.EMPREEND E PART Versão : 4" -> "CYRELA BRAZIL REALTY S.A.EMPREEND E
+    PART"). Retorna None se nao conseguir reconhecer o padrao (ex: PDF nao e'
+    um FRE da CVM).
+    """
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            first_page_text = pdf.pages[0].extract_text() or ""
+        match = _COMPANY_NAME_RE.search(first_page_text)
+        return match.group(1).strip() if match else None
+    except Exception as e:
+        custom_log(
+            msg=traceback.format_exception(e),
+            component="/fre_pdf_parser/extract_company_name",
+            severity="ERROR",
+        )
+        return None
 
 
 def _clean_text(text):
