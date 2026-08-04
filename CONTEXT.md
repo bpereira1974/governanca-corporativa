@@ -20,18 +20,22 @@ Ferramenta para avaliação e ranking de governança corporativa de empresas bra
 ```
 governanca-corporativa/
 ├── src/
-│   ├── main.py               # Entrypoint: roda avaliação completa e exibe ranking
-│   ├── scoring_engine.py     # Motor de cálculo de notas por bloco
-│   ├── parser_planilha.py    # Lê Template_Governança.xlsx e extrai dados das empresas
+│   ├── main.py                 # Entrypoint: roda avaliação completa e exibe ranking
+│   ├── scoring_engine.py       # Motor de cálculo de notas por bloco
+│   ├── parser_planilha.py      # Lê Template_Governança.xlsx e extrai dados das empresas
+│   ├── fre_pdf_parser.py       # Extrai Conselho/Diretoria/Comitês direto do PDF do FRE
+│   ├── dashboard_store.py      # Persistência (JSON) das empresas processadas no dashboard
+│   ├── dashboard_app.py        # Dashboard interativo (Streamlit) — ver seção própria abaixo
 │   └── utils/
-│       └── logging_utils.py  # Logger estruturado padrão LEQ (custom_log)
+│       └── logging_utils.py    # Logger estruturado padrão LEQ (custom_log)
 ├── configs/
-│   └── config.py             # Todas as regras de pontuação (pesos, tabelas de conversão)
+│   └── config.py               # Todas as regras de pontuação (pesos, tabelas de conversão)
 ├── tests/
 ├── data/
-│   └── Template_Governança.xlsx   # Planilha com critérios e 10 empresas de exemplo
-├── CONTEXT.md                # Este arquivo
-├── requirements.txt          # pandas==3.0.2, openpyxl==3.1.5, python-dotenv==1.0.1
+│   ├── Template_Governança.xlsx    # Planilha com critérios e 10 empresas de exemplo
+│   └── dashboard_store.json        # Store do dashboard (gerado, gitignored — ver *.json)
+├── CONTEXT.md                  # Este arquivo
+├── requirements.txt            # pandas, openpyxl, python-dotenv, pdfplumber, streamlit
 ├── .env.example
 └── .gitignore
 ```
@@ -40,7 +44,7 @@ governanca-corporativa/
 - API Flask (Cloud Run) — expor o motor como endpoint HTTP
 - MCP Server — ferramentas para o Claude usar diretamente
 - Módulo BigQuery — buscar dados do FRE automaticamente
-- Dashboard React — interface visual para analistas
+- ~~Dashboard~~ — **iniciado em 2026-08-04** (Streamlit), ver seção "Dashboard de Governança" abaixo
 
 ---
 
@@ -229,6 +233,34 @@ Mais dois formatos novos, ambos corrigidos de forma genérica (sem regredir Cyre
 3. **Nome do comitê "perdido" quando o texto de outra coluna (prazo do mandato) continua depois do marcador `(Efetivo)`:** a heurística de recuperação de nome (criada pro caso do BTG) assumia que o nome do comitê ficava sempre bem no fim da linha normalizada; na Estapar, o "Prazo do mandato" é um texto longo que continua *depois* do "(Efetivo)", então a heurística precisou ser refinada pra cortar exatamente antes do marcador `(Efetivo)/(Suplente)/(Coordenador)`, descartando o que vem depois
 - **Resultado final da Estapar:** 12/12 membros corretos (8 Conselho, 4 Diretoria — batendo com a tabela 7.1D), 3 comitês certos (Auditoria Estatutário, Financeiro — nome parcial, falta "e de Investimentos" —, Inovação), nenhum membro de comitê (16 no total, incluindo 4 externos ao Conselho/Diretoria) ficou sem classificação
 - **Conclusão desta rodada de 3 empresas:** a abordagem de parsing generaliza bem — cada nova empresa expôs 1-2 variações de formatação genuínas (não specific-to-company hacks), todas corrigidas com heurísticas que continuam funcionando nas empresas testadas anteriormente. Ainda vale testar mais empresas antes de confiar em produção sem supervisão, mas a confiança na abordagem aumentou bastante
+
+### Detecção automática do capítulo 7 (`find_chapter7_page_range`, 2026-08-04)
+
+Antes disso, era preciso descobrir manualmente (grep/busca de texto) em que páginas do PDF ficava o capítulo 7 de cada empresa — inviável para um dashboard interativo de upload. `find_chapter7_page_range()` escaneia o **cabeçalho de seção repetido** em cada página (a 2ª linha não-vazia, logo após o título "Formulário de Referência...") em busca de "7.1 Principais características" (início) e "8.1"/"7.5 Relações familiares" (fim, o que vier primeiro).
+
+**Armadilha descoberta:** a página de índice também lista "7.1 Principais características..." como item de sumário — checar a substring em qualquer lugar da página dava falso positivo na página 2. A solução foi checar especificamente a 2ª linha da página (que só tem esse texto em páginas de conteúdo real, não no índice, que tem "Índice" nessa posição).
+
+Validado nas 3 empresas: localizou corretamente o intervalo em todas, sem precisar de nenhuma informação manual.
+
+---
+
+## Dashboard de Governança (`src/dashboard_app.py`, iniciado 2026-08-04)
+
+Primeira versão do dashboard interativo, construído em **Streamlit** (decisão registrada abaixo). Funcionalidades:
+- Upload de PDF do FRE → detecção automática do capítulo 7 → parsing ao vivo → exibição da composição do Conselho/Diretoria/Comitês com tempo no cargo calculado
+- Nome da empresa sugerido automaticamente a partir do cabeçalho do PDF (`extract_company_name`)
+- Persistência simples em `data/dashboard_store.json` (gitignored — ver `.gitignore`, `*.json`) — trocar por banco de dados quando o BigQuery/CVM estiver resolvido
+- Visão geral comparando todas as empresas já processadas
+
+**Como rodar:** `venv\Scripts\streamlit.exe run src/dashboard_app.py`
+
+**Decisão de arquitetura (Streamlit vs. Dash/deep-thought vs. React):** optamos por Streamlit pela velocidade de entrega, com o cuidado de manter toda a lógica de negócio (parsing, cálculo de tempo no cargo, agregação) em módulos Python puros (`fre_pdf_parser.py`, `dashboard_store.py`), separados da camada de apresentação. Isso deixa aberta a migração futura:
+- **Para Dash** (convenção oficial da LEQ pra dashboards, ver skill `new-deepthought-dashboard`): reaproveita 100% da lógica, só reescreve a camada de apresentação
+- **Para React**: os mesmos módulos virariam endpoints de uma API Flask — que já era o próximo passo planejado (item 8 da lista de próximos passos) independente do dashboard
+
+**Testado:** preview local via browser (sidebar com lista de empresas, métricas, abas Conselho/Diretoria/Comitês renderizando corretamente para as 3 empresas seedadas). O fluxo de upload+parsing foi validado simulando o objeto de upload do Streamlit diretamente em Python (reprocessando o BTG sob um nome novo) — a interação real de clicar e selecionar um arquivo no seletor do SO não é automatizável com as ferramentas de navegador disponíveis nesta sessão, mas o código por trás do botão é o mesmo já testado exaustivamente no parser.
+
+**Pendente para próxima sessão:** testar o upload manualmente (você mesmo, direto no navegador) pra confirmar a interação de ponta a ponta que eu não consegui automatizar.
 
 ---
 
