@@ -143,25 +143,30 @@ def _parse_orgaos(block):
 
 
 # linhas genericas da tabela: "Outros Comitês" (nome do comite fica numa
-# coluna a parte) OU um nome de comite direto na propria coluna "Tipo
-# comitê" (ex: "Comitê de Risco" no FRE do BTG). Excluimos explicitamente o
-# padrao "Comitê de Comitê de" (duas colunas vizinhas comecando igual), que
-# e' o artefato da linha ambigua do Comite de Auditoria (ver abaixo) — sem
-# essa exclusao, o comeco dessa linha seria capturado como um comite
-# generico chamado "Comitê de Comitê".
+# coluna a parte), um nome de comite direto na propria coluna "Tipo
+# comitê" iniciando com "Comitê de X" (ex: "Comitê de Risco" no FRE do
+# BTG), ou iniciando so' com "Comitê X" sem o "de" (ex: "Comitê
+# Financeiro" na Estapar). Excluimos explicitamente o padrao "Comitê de
+# Comitê de" (duas colunas vizinhas comecando igual), que e' o artefato da
+# linha ambigua do Comite de Auditoria (ver abaixo) — sem essa exclusao, o
+# comeco dessa linha seria capturado como um comite generico chamado
+# "Comitê de Comitê".
 _COMITE_ROW_START_RE = re.compile(
-    r"^\s*(?P<tipo>(?!Comitê\s+de\s+Comitê\s+de\b)Comitê\s+de\s+\S+(?:\s+\S+)*?|Outros\s+Comitês)"
+    r"^\s*(?P<tipo>(?!Comitê\s+de\s+Comitê\s+de\b)"
+    r"(?:Comitê\s+de\s+\S+(?:\s+\S+)*?|Comitê\s+(?!de\b)\S+(?:\s+\S+)*?|Outros\s+Comitês))"
     r"[^\n]*?\d{2}/\d{2}/\d{4}",
     re.MULTILINE,
 )
 
 # sinal robusto a quebra de linha/coluna de que a linha do "Comite de
-# Auditoria Estatuario" esta presente: quando a coluna "Tipo auditoria"
+# Auditoria Estatutario" esta presente: quando a coluna "Tipo auditoria"
 # vizinha tem texto longo, "Comitê de" e "Auditoria" quebram em linhas
 # fisicas diferentes, entao nao da' pra ancorar por posicao de linha (ao
 # contrario dos casos acima). Detectamos pela descricao do regime
 # regulatorio, que e' um texto fixo, nao pelo cabecalho da coluna em si.
-_COMITE_AUDITORIA_SIGNAL_RE = re.compile(r"Resolução\s+CVM|Estatut[áa]rio", re.IGNORECASE)
+# "Estatut?ário" tolera a variante "Estatuário" (sem o 2o "t") vista no FRE
+# da Estapar, alem da grafia usual "Estatutário".
+_COMITE_AUDITORIA_SIGNAL_RE = re.compile(r"Resolução\s+CVM|Estatut?[áa]rio", re.IGNORECASE)
 
 # nomes dos comites de assessoramento conhecidos quando o "Tipo comitê" e'
 # generico ("Outros Comitês") e o nome real fica numa coluna a parte —
@@ -169,6 +174,8 @@ _COMITE_AUDITORIA_SIGNAL_RE = re.compile(r"Resolução\s+CVM|Estatut[áa]rio", r
 KNOWN_COMMITTEE_NAMES = [
     "Comitê de Pessoas e Sustentabilidade",  # Cyrela
     "Comitê de Estratégia e Finanças",  # Cyrela
+    "Comitê Financeiro e de Investimentos",  # Estapar
+    "Comitê de Inovação",  # Estapar
 ]
 
 # palavras da coluna "Cargo ocupado" que, se capturadas logo apos "Comitê de",
@@ -239,16 +246,20 @@ def _parse_comites(block, known_committee_names=KNOWN_COMMITTEE_NAMES):
                 if all(kw.strip() in row_norm for kw in keywords):
                     comite_especifico = name
                     break
-        elif tipo.replace("Comitê de", "").strip() in _CARGO_KEYWORDS:
+        elif re.sub(r"^Comitê(?:\s+de)?\s*", "", tipo).strip() in _CARGO_KEYWORDS:
             # o nome do comite nao coube na 1a linha fisica (junto com a
             # coluna "Cargo ocupado") e foi empurrado pra uma linha seguinte;
             # o regex capturou por engano a palavra do cargo (ex: "Comitê de
             # Membro" em vez de "Comitê de Remuneração"). O nome real
-            # costuma sobrar no fim da linha normalizada, depois da ultima
-            # data e antes de um parenteses tipo "(Efetivo)"/"(Suplente)"
+            # costuma sobrar logo depois da ultima data e antes do marcador
+            # "(Efetivo)"/"(Suplente)"/"(Coordenador)" — tudo depois disso
+            # e' texto de outra coluna (ex: prazo do mandato) que vazou pra
+            # dentro da mesma linha fisica e deve ser descartado
             tail = row_norm.rsplit(dates[-1], 1)[-1] if dates else row_norm
-            tail = re.sub(r"\(\w+\)\s*$", "", tail).strip()
-            comite_especifico = f"Comitê de {tail}" if tail else None
+            marker = re.search(r"\((?:Efetivo|Suplente|Coordenador)\)", tail)
+            name = tail[:marker.start()].strip() if marker else tail.strip()
+            prefix = "Comitê de" if tipo.startswith("Comitê de") else "Comitê"
+            comite_especifico = f"{prefix} {name}" if name else None
         else:
             # nome direto na propria coluna "Tipo comitê" (ex: "Comitê de Risco")
             comite_especifico = tipo

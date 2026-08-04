@@ -220,6 +220,16 @@ Confirmou a suspeita: **o layout varia entre empresas** e quebrou duas heurísti
 - **Achado de dado (não é bug):** a seção 7.2 do BTG lista 5 comitês (Auditoria, Remuneração, Risco, Compliance, ESG), mas só 3 aparecem na tabela 7.4 (composição por administrador) — Compliance e ESG aparentemente são compostos por pessoas fora do Conselho/Diretoria, então não aparecem nessa tabela específica. Confirmado por busca no texto (não há nenhuma menção a esses dois nomes na seção 7.4 inteira)
 - **Limitação que continua:** `KNOWN_COMMITTEE_NAMES` (usado só para o padrão "Outros Comitês") ainda está hardcoded com os nomes da Cyrela — para uma 3ª empresa que use esse padrão com nomes diferentes, precisa estender a lista (ou trocar por uma extração dinâmica a partir da seção 7.2, que lista os comitês de cada empresa em texto livre)
 
+### Terceiro teste: FRE da Estapar/Allpark (2026, páginas 163–204)
+
+Mais dois formatos novos, ambos corrigidos de forma genérica (sem regredir Cyrela nem BTG):
+
+1. **Nome de comitê sem "de" depois de "Comitê":** a Estapar tem um "Comitê Financeiro e de Investimentos" — no FRE, a coluna "Tipo comitê" mostra só "Comitê Financeiro" (sem "de" logo após "Comitê"), diferente do padrão "Comitê de X" visto até então. O regex de início de linha exigia literalmente a palavra "de" — generalizado para aceitar tanto "Comitê de X" quanto "Comitê X" diretamente
+2. **Grafia alternativa de "Estatutário":** o sinal usado pra detectar a linha do Comitê de Auditoria buscava o texto fixo "Estatutário", mas este FRE grafa "**Estatuário**" (sem o segundo "t") na descrição do regime regulatório. Regex ajustado pra tolerar as duas grafias (`Estatut?ário`)
+3. **Nome do comitê "perdido" quando o texto de outra coluna (prazo do mandato) continua depois do marcador `(Efetivo)`:** a heurística de recuperação de nome (criada pro caso do BTG) assumia que o nome do comitê ficava sempre bem no fim da linha normalizada; na Estapar, o "Prazo do mandato" é um texto longo que continua *depois* do "(Efetivo)", então a heurística precisou ser refinada pra cortar exatamente antes do marcador `(Efetivo)/(Suplente)/(Coordenador)`, descartando o que vem depois
+- **Resultado final da Estapar:** 12/12 membros corretos (8 Conselho, 4 Diretoria — batendo com a tabela 7.1D), 3 comitês certos (Auditoria Estatutário, Financeiro — nome parcial, falta "e de Investimentos" —, Inovação), nenhum membro de comitê (16 no total, incluindo 4 externos ao Conselho/Diretoria) ficou sem classificação
+- **Conclusão desta rodada de 3 empresas:** a abordagem de parsing generaliza bem — cada nova empresa expôs 1-2 variações de formatação genuínas (não specific-to-company hacks), todas corrigidas com heurísticas que continuam funcionando nas empresas testadas anteriormente. Ainda vale testar mais empresas antes de confiar em produção sem supervisão, mas a confiança na abordagem aumentou bastante
+
 ---
 
 ## Status do ambiente local (atualizado 2026-07-03)
