@@ -75,7 +75,7 @@ def _split_member_blocks(text):
 # o primeiro fragmento da coluna "Órgão da Administração" pra identificar o
 # orgao, em vez de tentar casar a frase completa.
 _ORGAO_ROW_START_RE = re.compile(
-    r"^\s*(?P<first>Conselho de|Conselho|Diretoria)\s+\d{2}/\d{2}/\d{4}",
+    r"^\s*(?P<first>Conselho de|Conselho|Diretoria e|Diretoria)\s+\d{2}/\d{2}/\d{4}",
     re.MULTILINE,
 )
 
@@ -103,7 +103,10 @@ def _parse_orgaos(block):
         lines = [l for l in row_text.split("\n") if l.strip()]
 
         first = m.group("first")
-        if first == "Diretoria":
+        if first == "Diretoria e":
+            # cargo duplo: "Diretoria e Conselho de Administração" numa so linha
+            orgao = "Diretoria e Conselho de Administração"
+        elif first == "Diretoria":
             orgao = "Diretoria"
         elif first == "Conselho de":
             orgao = "Conselho de Administração"
@@ -139,21 +142,38 @@ def _parse_orgaos(block):
     return orgaos
 
 
-_COMITE_ROW_START_RE = re.compile(r"^\s*Outros\s+Comitês\b", re.MULTILINE)
+# linhas genericas da tabela: "Outros Comitês" (nome do comite fica numa
+# coluna a parte) OU um nome de comite direto na propria coluna "Tipo
+# comitê" (ex: "Comitê de Risco" no FRE do BTG). Excluimos explicitamente o
+# padrao "Comitê de Comitê de" (duas colunas vizinhas comecando igual), que
+# e' o artefato da linha ambigua do Comite de Auditoria (ver abaixo) — sem
+# essa exclusao, o comeco dessa linha seria capturado como um comite
+# generico chamado "Comitê de Comitê".
+_COMITE_ROW_START_RE = re.compile(
+    r"^\s*(?P<tipo>(?!Comitê\s+de\s+Comitê\s+de\b)Comitê\s+de\s+\S+(?:\s+\S+)*?|Outros\s+Comitês)"
+    r"[^\n]*?\d{2}/\d{2}/\d{4}",
+    re.MULTILINE,
+)
 
 # sinal robusto a quebra de linha/coluna de que a linha do "Comite de
-# Auditoria Estatuario" esta presente: essa frase (que identifica o tipo
-# "Comite de Auditoria") quebra de forma imprevisivel entre colunas vizinhas
-# (a coluna "Tipo auditoria" tambem comeca com "Comite de"), entao
-# detectamos pela descricao do regime regulatorio, que e' um texto fixo.
+# Auditoria Estatuario" esta presente: quando a coluna "Tipo auditoria"
+# vizinha tem texto longo, "Comitê de" e "Auditoria" quebram em linhas
+# fisicas diferentes, entao nao da' pra ancorar por posicao de linha (ao
+# contrario dos casos acima). Detectamos pela descricao do regime
+# regulatorio, que e' um texto fixo, nao pelo cabecalho da coluna em si.
 _COMITE_AUDITORIA_SIGNAL_RE = re.compile(r"Resolução\s+CVM|Estatut[áa]rio", re.IGNORECASE)
 
-# nomes dos comites de assessoramento, conforme enumerados na secao 7.2 do FRE
-# (usado para reconhecer o comite especifico quando tipo_comite = "Outros Comitês")
+# nomes dos comites de assessoramento conhecidos quando o "Tipo comitê" e'
+# generico ("Outros Comitês") e o nome real fica numa coluna a parte —
+# especifico por empresa; estender conforme novos FREs forem testados
 KNOWN_COMMITTEE_NAMES = [
-    "Comitê de Pessoas e Sustentabilidade",
-    "Comitê de Estratégia e Finanças",
+    "Comitê de Pessoas e Sustentabilidade",  # Cyrela
+    "Comitê de Estratégia e Finanças",  # Cyrela
 ]
+
+# palavras da coluna "Cargo ocupado" que, se capturadas logo apos "Comitê de",
+# indicam que o nome do comite nao coube na 1a linha (ver _parse_comites)
+_CARGO_KEYWORDS = {"Membro", "Outros", "Coordenador", "Secretário", "Secretária"}
 
 
 def _cargo_from_text(text):
@@ -169,27 +189,27 @@ def _cargo_from_text(text):
 def _parse_comites(block, known_committee_names=KNOWN_COMMITTEE_NAMES):
     """Parseia a tabela 'Comitês' de um bloco de membro (secao 7.4).
 
-    A coluna 'Tipo comitê' e a coluna vizinha 'Tipo auditoria' comecam ambas
-    com "Comitê de", entao a linha do Comitê de Auditoria Estatutario nao da'
-    pra ancorar de forma confiavel por posicao de linha (ao contrario de
-    "Outros Comitês", que e' uma frase curta que nao quebra e nao se repete
-    em coluna vizinha). Por isso ela e' tratada separadamente: assumimos que,
-    quando presente, ela e' sempre a 1a linha da tabela (e' assim em todos os
-    membros observados no FRE da Cyrela) e a identificamos pelo texto fixo do
-    regime regulatorio ("Resolução CVM", "Estatutário"), nao pelo cabecalho
-    da coluna em si.
+    O Comite de Auditoria Estatutario e' tratado separadamente do resto: a
+    coluna 'Tipo comitê' e a coluna vizinha 'Tipo auditoria' comecam ambas
+    com "Comitê de" para essa linha especificamente, entao ela nao da' pra
+    ancorar de forma confiavel por posicao de linha como as demais. Por
+    isso e' identificada pelo texto fixo do regime regulatorio ("Resolução
+    CVM", "Estatutário") em vez do cabecalho da coluna, buscado na secao
+    inteira (nao assume posicao/ordem).
     """
     section = _field(r"Comitês:(.*?)(?:Condenações:|\Z)", block)
     if not section:
         return []
 
-    outros_matches = list(_COMITE_ROW_START_RE.finditer(section))
-    first_outros_start = outros_matches[0].start() if outros_matches else len(section)
-
     comites = []
 
-    auditoria_chunk = section[:first_outros_start]
-    if _COMITE_AUDITORIA_SIGNAL_RE.search(auditoria_chunk):
+    auditoria_signal = _COMITE_AUDITORIA_SIGNAL_RE.search(section)
+    if auditoria_signal:
+        # a linha do Comite de Auditoria abrange do inicio da secao (ou do
+        # fim da linha anterior) ate o proximo salto de paragrafo em branco;
+        # aproximamos pegando ate 400 chars ao redor do sinal encontrado
+        window_start = max(0, auditoria_signal.start() - 300)
+        auditoria_chunk = section[window_start:auditoria_signal.end() + 100]
         dates = re.findall(r"\d{2}/\d{2}/\d{4}", auditoria_chunk)
         comites.append(
             {
@@ -202,24 +222,40 @@ def _parse_comites(block, known_committee_names=KNOWN_COMMITTEE_NAMES):
             }
         )
 
-    for i, m in enumerate(outros_matches):
-        end = outros_matches[i + 1].start() if i + 1 < len(outros_matches) else len(section)
+    row_matches = list(_COMITE_ROW_START_RE.finditer(section))
+    for i, m in enumerate(row_matches):
+        end = row_matches[i + 1].start() if i + 1 < len(row_matches) else len(section)
         row_text = section[m.start():end]
         row_norm = " ".join(row_text.split())
         dates = re.findall(r"\d{2}/\d{2}/\d{4}", row_text)
 
-        comite_especifico = None
-        for name in known_committee_names:
-            # o nome do comite fica espalhado em ate 2 palavras por linha;
-            # comparamos por palavras-chave em vez da frase inteira
-            keywords = name.replace("Comitê de ", "").split(" e ")
-            if all(kw.strip() in row_norm for kw in keywords):
-                comite_especifico = name
-                break
+        tipo = " ".join(m.group("tipo").split())
+        if tipo == "Outros Comitês":
+            comite_especifico = None
+            for name in known_committee_names:
+                # o nome do comite fica espalhado em ate 2 palavras por linha;
+                # comparamos por palavras-chave em vez da frase inteira
+                keywords = name.replace("Comitê de ", "").split(" e ")
+                if all(kw.strip() in row_norm for kw in keywords):
+                    comite_especifico = name
+                    break
+        elif tipo.replace("Comitê de", "").strip() in _CARGO_KEYWORDS:
+            # o nome do comite nao coube na 1a linha fisica (junto com a
+            # coluna "Cargo ocupado") e foi empurrado pra uma linha seguinte;
+            # o regex capturou por engano a palavra do cargo (ex: "Comitê de
+            # Membro" em vez de "Comitê de Remuneração"). O nome real
+            # costuma sobrar no fim da linha normalizada, depois da ultima
+            # data e antes de um parenteses tipo "(Efetivo)"/"(Suplente)"
+            tail = row_norm.rsplit(dates[-1], 1)[-1] if dates else row_norm
+            tail = re.sub(r"\(\w+\)\s*$", "", tail).strip()
+            comite_especifico = f"Comitê de {tail}" if tail else None
+        else:
+            # nome direto na propria coluna "Tipo comitê" (ex: "Comitê de Risco")
+            comite_especifico = tipo
 
         comites.append(
             {
-                "tipo_comite": "Outros Comitês",
+                "tipo_comite": tipo,
                 "comite_especifico": comite_especifico,
                 "cargo_ocupado": _cargo_from_text(row_text),
                 "data_posse": dates[0] if dates else None,
@@ -321,15 +357,18 @@ def parse_administration_structure(pdf_path, page_start, page_end):
             "membros_comites": parse_members(secao_74, include_comites=True) if secao_74 else [],
         }
 
+        # usamos substring (nao igualdade exata) pois um membro pode acumular
+        # os dois orgaos numa linha so (ex: "Diretoria e Conselho de
+        # Administração", visto no FRE do BTG Pactual)
         n_conselho = sum(
             1 for m in result["membros"]
             for o in m["orgaos"]
-            if o["orgao"] == "Conselho de Administração"
+            if "Conselho de Administração" in o["orgao"]
         )
         n_diretoria = sum(
             1 for m in result["membros"]
             for o in m["orgaos"]
-            if o["orgao"] == "Diretoria"
+            if "Diretoria" in o["orgao"]
         )
         comites_unicos = {
             c["comite_especifico"] or c["tipo_comite"]
