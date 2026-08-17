@@ -242,6 +242,22 @@ Antes disso, era preciso descobrir manualmente (grep/busca de texto) em que pág
 
 Validado nas 3 empresas: localizou corretamente o intervalo em todas, sem precisar de nenhuma informação manual.
 
+### Correção do "Cargo eletivo ocupado" (`_extract_cargo_eletivo`, 2026-08-04)
+
+**Bug encontrado pelo usuário testando o dashboard:** o campo `cargo_eletivo_ocupado` retornava besteira pros cargos de liderança — Efraim Horn, Raphael Abba Horn e Miguel Mickelberg (Co-Presidentes e CFO da Cyrela) apareciam com cargo **"Diretoria"** (o nome do órgão, não o cargo real), e vários conselheiros "regulares" apareciam com `None`.
+
+**Causa raiz:** a extração buscava a palavra-chave "Diretor" na linha inteira da tabela, mas a primeira ocorrência de "Diretor" é o próprio nome do órgão ("**Diretor**ia", na coluna "Órgão da Administração", que vem *antes* da coluna "Cargo eletivo ocupado" na mesma linha física). A busca capturava esse falso positivo antes de chegar no cargo real.
+
+**Correção:**
+1. A busca por palavras-chave de cargo agora começa **depois da 1ª data da linha** (Data da Eleição), que sempre separa a coluna do órgão da coluna do cargo — elimina o falso positivo do nome do órgão
+2. Adicionado um fallback pro caso de conselheiros "regulares": o cargo "Conselho de Administração (Efetivo)", escrito por extenso, quebra em várias linhas do mesmo jeito que o nome do órgão (mesma armadilha de sempre) — reconhecido agora pelo marcador `(Efetivo)`/`(Suplente)` que sobrevive intacto, mesmo sem conseguir recortar a frase inteira
+
+**Resultado (validado na Cyrela, 22/22 membros):** todos os cargos agora vêm preenchidos e corretos — "Diretor Presidente", "Diretor Financeiro", "Presidente do Conselho de Administração", "Conselho de Administração (Efetivo)", "C.F.(Efetivo)Eleito" etc. Sem regressão nas contagens de órgãos/comitês.
+
+**Limitação que continua:** quando o título completo quebra em 2 linhas físicas (ex: "Diretor Presidente **/ Superintendente**", "Diretor Financeiro **/ Diretor de Relações com Investidores**", "Conselho de Adm. **Independente (Efetivo)**"), só a 1ª linha é capturada — a parte que vem depois na 2ª linha física ainda se perde, pela mesma razão estrutural de sempre (colunas se intercalam quando o texto quebra em várias linhas). Corrigir isso de vez exigiria parsing por posição (x/y) das palavras no PDF, não só regex em texto — considerar se vira prioridade.
+
+**Pendente:** só foi possível re-testar contra a Cyrela nesta sessão — os PDFs do BTG e da Estapar não estavam mais na pasta Downloads do usuário (provavelmente organizada/limpa desde a última sessão). Os dados dessas duas empresas no dashboard (`data/dashboard_store.json`) ainda têm o cargo do bug antigo até serem reprocessadas.
+
 ---
 
 ## Dashboard de Governança (`src/dashboard_app.py`, iniciado 2026-08-04)

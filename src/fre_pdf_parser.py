@@ -169,6 +169,54 @@ _ORGAO_ROW_START_RE = re.compile(
     re.MULTILINE,
 )
 
+# palavras-chave que sinalizam onde comeca o texto da coluna "Cargo eletivo
+# ocupado", em ordem de prioridade de busca
+_CARGO_KEYWORDS_ORGAO = ["C.F.", "Conselho de Adm", "Outros Diretores", "Diretor"]
+
+
+def _extract_cargo_eletivo(row_text):
+    """Extrai o texto da coluna 'Cargo eletivo ocupado' de uma linha da
+    tabela 'Orgaos da Administracao'.
+
+    A primeira data da linha (Data da Eleição) fica logo apos o nome do
+    orgao (ex: "Diretoria"), que tambem contem a palavra "Diretor" como
+    prefixo — buscar a palavra-chave de cargo na linha inteira acabava
+    capturando por engano o proprio nome do orgao. Por isso a busca comeca
+    so' depois da 1a data. O fim do cargo e' aproximado pela proxima data
+    encontrada (Data de posse), que vem logo em seguida na mesma linha
+    fisica; se o cargo quebrar pra uma 2a linha (titulos compostos longos,
+    ex: "Diretor Presidente / Superintendente"), so' a parte que cabe na 1a
+    linha e' capturada — limitacao conhecida, ver CONTEXT.md.
+    """
+    first_date = re.search(r"\d{2}/\d{2}/\d{4}", row_text)
+    search_text = row_text[first_date.end():] if first_date else row_text
+
+    # "Presidente do Conselho de Administração" sempre quebra em varias
+    # linhas fisicas (o cargo mais o proprio nome do orgao de novo), entao
+    # e' reconstruido por texto fixo em vez de recorte posicional
+    if "Presidente do" in search_text:
+        return "Presidente do Conselho de Administração"
+
+    for keyword in _CARGO_KEYWORDS_ORGAO:
+        idx = search_text.find(keyword)
+        if idx == -1:
+            continue
+        rest = search_text[idx:]
+        stop = re.search(r"\d{2}/\d{2}/\d{4}", rest)
+        cargo = rest[: stop.start()] if stop else rest
+        cargo = " ".join(cargo.split()).rstrip("/").strip()
+        return cargo or None
+
+    # conselheiro "regular" (nem independente, nem presidente) tem o cargo
+    # "Conselho de Administração (Efetivo)" grafado por extenso, que quebra
+    # em varias linhas do mesmo jeito que o proprio nome do orgao — sem dar
+    # pra recortar por posicao, mas o marcador "(Efetivo)"/"(Suplente)"
+    # sobrevive intacto em alguma linha da tabela
+    marker = re.search(r"\((Efetivo|Suplente)\)", row_text)
+    if marker:
+        return f"Conselho de Administração ({marker.group(1)})"
+    return None
+
 
 def _parse_orgaos(block):
     """Extrai as linhas da tabela 'Orgaos da Administracao' de um bloco de membro.
@@ -206,17 +254,7 @@ def _parse_orgaos(block):
 
         dates = re.findall(r"\d{2}/\d{2}/\d{4}", row_text)
         eleito_pelo_controlador = _field(r"\b(Sim|Não)\b", row_text)
-        cargo_hint = None
-        if "C.F." in row_text or "C.F.(" in row_text:
-            cargo_hint = _field(r"(C\.F\.\S*)", row_text)
-        elif "Presidente do" in row_text:
-            cargo_hint = "Presidente do Conselho de Administração"
-        elif "Conselho de Adm" in row_text:
-            cargo_hint = _field(r"(Conselho de Adm\.\s*\S*\s*\(\w+\))", row_text)
-        elif "Outros Diretores" in row_text:
-            cargo_hint = "Outros Diretores"
-        elif "Diretor" in row_text:
-            cargo_hint = _field(r"(Diretor\S*(?:\s*/\s*\S+)*)", row_text)
+        cargo_hint = _extract_cargo_eletivo(row_text)
 
         orgaos.append(
             {
