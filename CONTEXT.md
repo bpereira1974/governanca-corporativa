@@ -268,6 +268,7 @@ Primeira versão do dashboard interativo, construído em **Streamlit** (decisão
 - Upload de PDF do FRE → detecção automática do capítulo 7 → parsing ao vivo → exibição da composição do Conselho/Diretoria/Comitês com tempo no cargo calculado
 - Nome da empresa sugerido automaticamente a partir do cabeçalho do PDF (`extract_company_name`)
 - **Mini currículos** (adicionado 2026-08-18): abaixo da tabela de cada órgão, um `st.expander` por membro com o texto de "Experiência Profissional" já extraído pelo parser (campo `experiencia_profissional`, existia desde o início mas não era exibido) + a profissão como legenda
+- **Aba Remuneração** (adicionada 2026-08-18): ver seção própria "Remuneração qualitativa (capítulo 8)" abaixo
 - Persistência simples em `data/dashboard_store.json` (gitignored — ver `.gitignore`, `*.json`) — trocar por banco de dados quando o BigQuery/CVM estiver resolvido
 - Visão geral comparando todas as empresas já processadas
 
@@ -277,9 +278,24 @@ Primeira versão do dashboard interativo, construído em **Streamlit** (decisão
 - **Para Dash** (convenção oficial da LEQ pra dashboards, ver skill `new-deepthought-dashboard`): reaproveita 100% da lógica, só reescreve a camada de apresentação
 - **Para React**: os mesmos módulos virariam endpoints de uma API Flask — que já era o próximo passo planejado (item 8 da lista de próximos passos) independente do dashboard
 
-**Testado:** preview local via browser (sidebar com lista de empresas, métricas, abas Conselho/Diretoria/Comitês renderizando corretamente para as 3 empresas seedadas). O fluxo de upload+parsing foi validado simulando o objeto de upload do Streamlit diretamente em Python (reprocessando o BTG sob um nome novo) — a interação real de clicar e selecionar um arquivo no seletor do SO não é automatizável com as ferramentas de navegador disponíveis nesta sessão, mas o código por trás do botão é o mesmo já testado exaustivamente no parser.
+**Testado:** preview local via browser, todas as abas. O upload real (clicar e selecionar arquivo no navegador) foi testado com sucesso pelo próprio usuário, sem necessidade de mais validação — processou a Even Construtora como 4ª empresa.
 
-**Pendente para próxima sessão:** testar o upload manualmente (você mesmo, direto no navegador) pra confirmar a interação de ponta a ponta que eu não consegui automatizar.
+---
+
+## Remuneração qualitativa — capítulo 8 do FRE (`parse_remuneracao_qualitativa`, 2026-08-18)
+
+Diferente do capítulo 7 (tabelas estruturadas com colunas fixas), o **capítulo 8 (remuneração) é majoritariamente texto corrido**, que varia bastante de redação entre empresas — regex não consegue produzir uma resposta 100% confiável e estruturada aqui, ao contrário do que fizemos para a composição do Conselho/Diretoria. Por decisão explícita do usuário (perguntado antes de implementar), a abordagem escolhida foi: **extrair o texto relevante + sinalizar SIM/NÃO/A CONFIRMAR por palavra-chave**, deixando a confirmação final para leitura humana do texto extraído — não IA, não regex "definitivo".
+
+**O que extrai:**
+- **`find_remuneracao_page_range()`** — localiza as páginas do capítulo 8 (mesma técnica de `find_chapter7_page_range`: cabeçalho de seção na 2ª linha de cada página), de "8.1" até "8.5"
+- **(a) Remuneração de longo prazo** (seção **8.4** "Plano de remuneração baseado em ações"): quando não há plano, a CVM usa um padrão de negação curto e consistente ("Não aplicável, tendo em vista que não há plano vigente...") — detectado via regex `_LONGO_PRAZO_NEGATIVO_RE`. Quando há plano, tenta identificar o tipo por palavra-chave (opções de compra de ações/stock options, ações restritas/RSU, phantom shares, matching de ações)
+- **(b) Metas/indicadores na remuneração variável de curto prazo** (seção **8.1** "Política ou prática de remuneração", texto completo): sinaliza SIM se o texto menciona "indicador(es)", "metas individuais/estabelecidas/corporativas", "KPI" ou "critérios de desempenho" — mas **não tenta identificar quais são os indicadores especificamente**, isso normalmente não vem detalhado publicamente no FRE (validado na Cyrela: o texto diz "com base em indicadores previamente determinados pelo Conselho de Administração", sem nomear quais)
+
+**Validado na Cyrela:** (a) NÃO — texto extraído confirma "não há plano vigente de remuneração baseada em ações" (bate com a tabela 8.5, que mostra 0% de remuneração baseada em ações); (b) SIM — menciona indicadores/metas.
+
+**Integração no dashboard:** nova aba "Remuneração" por empresa, com indicador SIM/NÃO colorido + texto extraído das seções 8.1/8.4 num expander pra conferência humana. Falha nessa extração não bloqueia o resto do processamento (upload continua funcionando mesmo se o capítulo 8 não for encontrado — ex: FRE com numeração atípica).
+
+**Limitação clara (por design, não bug):** isso é uma **triagem rápida por palavra-chave**, não uma classificação definitiva — sempre exige que o analista leia o texto extraído antes de usar a resposta. Ainda não testado contra outras empresas (BTG, Estapar, Even) — os PDFs originais precisam ser re-enviados pra validar a generalização, como fizemos com o capítulo 7.
 
 ---
 

@@ -540,3 +540,157 @@ def parse_administration_structure(pdf_path, page_start, page_end):
             severity="CRITICAL",
         )
         raise
+
+
+_SECAO_8_1_START_RE = re.compile(r"8\.1\s+Pol[ií]tica")
+_SECAO_8_5_START_RE = re.compile(r"^\s*8\.5\b", re.MULTILINE)
+
+
+def find_remuneracao_page_range(pdf_path):
+    """Localiza as paginas das secoes 8.1 (Politica de remuneração), 8.3
+    (Remuneração Variável) e 8.4 (Plano de remuneração baseado em ações) do
+    FRE. Mesma tecnica de find_chapter7_page_range: escaneia o cabecalho de
+    secao repetido na 2a linha de cada pagina.
+    """
+    try:
+        start_page = None
+        end_page = None
+        with pdfplumber.open(pdf_path) as pdf:
+            for i, page in enumerate(pdf.pages):
+                text = page.extract_text() or ""
+                lines = [l for l in text.split("\n") if l.strip()]
+                header = lines[1] if len(lines) > 1 else ""
+                if start_page is None:
+                    if _SECAO_8_1_START_RE.match(header.strip()):
+                        start_page = i + 1
+                    continue
+                if _SECAO_8_5_START_RE.match(header.strip()):
+                    end_page = i
+                    break
+
+        if start_page is None:
+            raise ValueError(
+                "Não foi possível localizar a seção 8.1 (remuneração) neste PDF"
+            )
+        if end_page is None:
+            end_page = start_page + 40
+
+        custom_log(
+            msg=f"Seção de remuneração localizada nas páginas {start_page}-{end_page} de {pdf_path}",
+            component="/fre_pdf_parser/find_remuneracao_page_range",
+            severity="INFO",
+        )
+        return start_page, end_page
+    except Exception as e:
+        custom_log(
+            msg=traceback.format_exception(e),
+            component="/fre_pdf_parser/find_remuneracao_page_range",
+            severity="CRITICAL",
+        )
+        raise
+
+
+# sinal de que a secao 8.4 nega a existencia de plano de remuneracao baseada
+# em acoes — quando ha' um plano vigente, a secao descreve o desenho dele em
+# vez de uma frase curta de negacao
+_LONGO_PRAZO_NEGATIVO_RE = re.compile(
+    r"não\s+(?:h[áa]|possui|existe)\s+plano|não\s+aplic[áa]vel", re.IGNORECASE
+)
+
+# tipos de instrumento de remuneracao de longo prazo reconhecidos por
+# palavra-chave no texto da secao 8.4
+_LONGO_PRAZO_TIPOS = [
+    (
+        "Opções de compra de ações (stock options)",
+        re.compile(r"op[çc][õo]es\s+de\s+compra\s+de\s+a[çc][õo]es|stock\s*options?", re.IGNORECASE),
+    ),
+    (
+        "Ações restritas (RSU)",
+        re.compile(r"a[çc][õo]es\s+restritas|restricted\s+stock|\bRSU\b", re.IGNORECASE),
+    ),
+    (
+        "Phantom shares / ações fantasma",
+        re.compile(r"phantom|a[çc][õo]es\s+fantasmas?", re.IGNORECASE),
+    ),
+    ("Matching de ações", re.compile(r"matching", re.IGNORECASE)),
+]
+
+# sinal (nao definitivo) de que a remuneracao variavel de curto prazo
+# menciona metas/indicadores de desempenho — a resposta completa (quais
+# indicadores) normalmente exige leitura humana do texto extraido
+_KPI_SIGNAL_RE = re.compile(
+    r"indicador(?:es)?|metas?\s+(?:individuais|estabelecidas|corporativas)"
+    r"|\bKPIs?\b|crit[ée]rios?\s+de\s+desempenho",
+    re.IGNORECASE,
+)
+
+
+def parse_remuneracao_qualitativa(pdf_path, page_start=None, page_end=None):
+    """Extrai informações qualitativas do capítulo 8 (remuneração) do FRE:
+
+    (a) se há remuneração de longo prazo baseada em ações e de que tipo
+        (seção 8.4 "Plano de remuneração baseado em ações")
+    (b) sinal de que a remuneração variável de curto prazo (bônus) é
+        baseada em metas/indicadores de desempenho (seção 8.1)
+
+    Diferente da estrutura do capítulo 7 (tabelas com colunas fixas), o
+    capítulo 8 é majoritariamente texto corrido, que varia bastante de
+    redação entre empresas. Por isso esta função NÃO tenta produzir uma
+    resposta definitiva: extrai o texto relevante e sinaliza SIM/NÃO por
+    palavra-chave, mas a leitura do texto extraído pelo analista continua
+    sendo necessária pra confirmar a resposta, principalmente pro item (b).
+    """
+    try:
+        if page_start is None or page_end is None:
+            page_start, page_end = find_remuneracao_page_range(pdf_path)
+
+        text = extract_section_text(pdf_path, page_start, page_end)
+
+        secao_81 = _field(
+            r"8\.1 Política ou prática de remuneração(.*?)(?:8\.2 Remuneração total|\Z)", text
+        ) or ""
+        secao_84 = _field(
+            r"8\.4 Plano de remuneração baseado em ações(.*?)(?:8\.5|\Z)", text
+        ) or ""
+
+        tem_plano_longo_prazo = bool(secao_84.strip()) and not _LONGO_PRAZO_NEGATIVO_RE.search(secao_84)
+        tipos_detectados = (
+            [nome for nome, padrao in _LONGO_PRAZO_TIPOS if padrao.search(secao_84)]
+            if tem_plano_longo_prazo
+            else []
+        )
+        sinal_kpi_curto_prazo = bool(_KPI_SIGNAL_RE.search(secao_81))
+
+        # remove as repeticoes do cabecalho da propria secao (aparece 1x por
+        # pagina) antes de exibir o texto — e' ruido, nao conteudo
+        texto_81 = " ".join(re.sub(r"8\.1 Política ou prática de remuneração", "", secao_81).split())
+        texto_84 = " ".join(re.sub(r"8\.4 Plano de remuneração baseado em ações", "", secao_84).split())
+
+        resultado = {
+            "remuneracao_longo_prazo": {
+                "possui_plano": tem_plano_longo_prazo,
+                "tipos_detectados": tipos_detectados,
+                "texto_secao_8_4": texto_84,
+            },
+            "remuneracao_curto_prazo_kpis": {
+                "sinal_metas_indicadores": sinal_kpi_curto_prazo,
+                "texto_secao_8_1": texto_81,
+            },
+        }
+
+        custom_log(
+            msg=(
+                f"Remuneração qualitativa extraída: longo prazo={tem_plano_longo_prazo} "
+                f"({tipos_detectados}), sinal KPI curto prazo={sinal_kpi_curto_prazo}"
+            ),
+            component="/fre_pdf_parser/parse_remuneracao_qualitativa",
+            severity="INFO",
+        )
+        return resultado
+    except Exception as e:
+        custom_log(
+            msg=traceback.format_exception(e),
+            component="/fre_pdf_parser/parse_remuneracao_qualitativa",
+            severity="CRITICAL",
+        )
+        raise

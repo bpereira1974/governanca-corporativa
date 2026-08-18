@@ -17,6 +17,7 @@ from src.fre_pdf_parser import (
     find_chapter7_page_range,
     parse_administration_structure,
     extract_company_name,
+    parse_remuneracao_qualitativa,
 )
 from src.dashboard_store import load_companies, save_company, delete_company
 from src.utils.logging_utils import custom_log
@@ -54,6 +55,20 @@ def _processar_upload(uploaded_file, nome_empresa):
             "arquivo_original": uploaded_file.name,
             "paginas_capitulo_7": [page_start, page_end],
         }
+
+        try:
+            resultado["remuneracao"] = parse_remuneracao_qualitativa(tmp_path)
+        except Exception as e:
+            # a secao de remuneracao e' um bonus sobre o resultado principal
+            # (composicao do Conselho/Diretoria) — se ela falhar (ex: FRE com
+            # numeracao atipica), nao queremos perder o resto do processamento
+            custom_log(
+                msg=traceback.format_exception(e),
+                component="/dashboard_app/_processar_upload",
+                severity="WARNING",
+            )
+            resultado["remuneracao"] = None
+
         save_company(nome_empresa, resultado)
         return resultado
     except Exception as e:
@@ -100,6 +115,44 @@ def _render_curriculos(pessoas):
             if membro.get("profissao"):
                 st.caption(membro["profissao"])
             st.write(membro.get("experiencia_profissional") or "Currículo não disponível no FRE.")
+
+
+def _render_remuneracao(remuneracao):
+    if not remuneracao:
+        st.info(
+            "Não foi possível localizar/extrair a seção de remuneração (capítulo 8) "
+            "deste FRE — empresa processada antes dessa funcionalidade existir, ou "
+            "o PDF tem uma numeração de seção atípica."
+        )
+        return
+
+    st.caption(
+        "Extração automática por palavra-chave a partir de texto corrido — "
+        "confira o texto original antes de usar como resposta final."
+    )
+
+    longo = remuneracao["remuneracao_longo_prazo"]
+    curto = remuneracao["remuneracao_curto_prazo_kpis"]
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**(a) Remuneração de longo prazo**")
+        if longo["possui_plano"]:
+            tipos = ", ".join(longo["tipos_detectados"]) or "tipo não identificado por palavra-chave"
+            st.success(f"SIM — indícios de plano vigente ({tipos})")
+        else:
+            st.error("NÃO — texto indica que não há plano vigente")
+        with st.expander("Ver texto extraído (seção 8.4)"):
+            st.write(longo["texto_secao_8_4"] or "Seção não encontrada.")
+
+    with col2:
+        st.markdown("**(b) Metas/indicadores na remuneração variável de curto prazo**")
+        if curto["sinal_metas_indicadores"]:
+            st.success("SIM — o texto menciona metas/indicadores de desempenho")
+        else:
+            st.warning("A CONFIRMAR — nenhuma palavra-chave de meta/indicador encontrada")
+        with st.expander("Ver texto extraído (seção 8.1)"):
+            st.write(curto["texto_secao_8_1"] or "Seção não encontrada.")
 
 
 def _render_tabela_comites(membros_comites):
@@ -180,7 +233,9 @@ def main():
     col2.metric("Diretoria", resumo["n_membros_diretoria"])
     col3.metric("Comitês de assessoramento", resumo["n_comites"])
 
-    aba_conselho, aba_diretoria, aba_comites = st.tabs(["Conselho de Administração", "Diretoria", "Comitês"])
+    aba_conselho, aba_diretoria, aba_comites, aba_remuneracao = st.tabs(
+        ["Conselho de Administração", "Diretoria", "Comitês", "Remuneração"]
+    )
     with aba_conselho:
         _render_tabela_orgao(dados["membros"], "Conselho de Administração")
     with aba_diretoria:
@@ -189,6 +244,8 @@ def main():
         if resumo["comites"]:
             st.write("Comitês identificados: " + ", ".join(resumo["comites"]))
         _render_tabela_comites(dados["membros_comites"])
+    with aba_remuneracao:
+        _render_remuneracao(dados.get("remuneracao"))
 
     if len(companies) > 1:
         st.divider()
