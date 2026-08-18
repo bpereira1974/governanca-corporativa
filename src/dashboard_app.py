@@ -70,6 +70,7 @@ def _processar_upload(uploaded_file, nome_empresa):
 
 def _render_tabela_orgao(membros, filtro_orgao):
     linhas = []
+    pessoas = []
     for m in membros:
         for o in m["orgaos"]:
             if filtro_orgao in o["orgao"]:
@@ -81,8 +82,24 @@ def _render_tabela_orgao(membros, filtro_orgao):
                         "Tempo no cargo": _tempo_no_cargo(o["data_inicio_primeiro_mandato"]),
                     }
                 )
+                pessoas.append((m, o["cargo_eletivo_ocupado"]))
+                break
     linhas.sort(key=lambda r: r["Nome"])
     st.dataframe(linhas, width='stretch', hide_index=True)
+    _render_curriculos(pessoas)
+
+
+def _render_curriculos(pessoas):
+    pessoas = sorted(pessoas, key=lambda p: p[0]["nome"])
+    st.markdown("**Mini currículos**")
+    for membro, cargo in pessoas:
+        titulo = membro["nome"]
+        if cargo:
+            titulo += f" — {cargo}"
+        with st.expander(titulo):
+            if membro.get("profissao"):
+                st.caption(membro["profissao"])
+            st.write(membro.get("experiencia_profissional") or "Currículo não disponível no FRE.")
 
 
 def _render_tabela_comites(membros_comites):

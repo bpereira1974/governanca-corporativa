@@ -191,11 +191,14 @@ def _extract_cargo_eletivo(row_text):
     first_date = re.search(r"\d{2}/\d{2}/\d{4}", row_text)
     search_text = row_text[first_date.end():] if first_date else row_text
 
-    # "Presidente do Conselho de Administração" sempre quebra em varias
-    # linhas fisicas (o cargo mais o proprio nome do orgao de novo), entao
-    # e' reconstruido por texto fixo em vez de recorte posicional
+    # "Presidente do Conselho de Administração" e "Vice Presidente Cons. de
+    # Administração" sempre quebram em varias linhas fisicas (o cargo mais
+    # o proprio nome do orgao de novo), entao sao reconstruidos por texto
+    # fixo em vez de recorte posicional
     if "Presidente do" in search_text:
         return "Presidente do Conselho de Administração"
+    if "Vice Presidente" in search_text:
+        return "Vice-Presidente do Conselho de Administração"
 
     for keyword in _CARGO_KEYWORDS_ORGAO:
         idx = search_text.find(keyword)

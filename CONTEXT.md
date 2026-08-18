@@ -258,6 +258,8 @@ Validado nas 3 empresas: localizou corretamente o intervalo em todas, sem precis
 
 **Pendente:** só foi possível re-testar contra a Cyrela nesta sessão — os PDFs do BTG e da Estapar não estavam mais na pasta Downloads do usuário (provavelmente organizada/limpa desde a última sessão). Os dados dessas duas empresas no dashboard (`data/dashboard_store.json`) ainda têm o cargo do bug antigo até serem reprocessadas.
 
+**Atualização (mesmo dia):** usuário testou o upload por conta própria pelo dashboard e processou uma 4ª empresa (**Even Construtora**) — confirmando que o fluxo de upload funciona de ponta a ponta na prática, não só simulado. Esse teste revelou mais um cargo que quebra em 2 linhas e não estava coberto: **"Vice Presidente [do] Conselho de Administração"** (abreviado "Vice Presidente Cons. de Administração" no PDF). Adicionado como reconstrução por texto fixo, igual ao "Presidente do Conselho de Administração". Cyrela e Even reprocessadas com o fix, ambas 100% dos cargos preenchidos corretamente.
+
 ---
 
 ## Dashboard de Governança (`src/dashboard_app.py`, iniciado 2026-08-04)
@@ -265,6 +267,7 @@ Validado nas 3 empresas: localizou corretamente o intervalo em todas, sem precis
 Primeira versão do dashboard interativo, construído em **Streamlit** (decisão registrada abaixo). Funcionalidades:
 - Upload de PDF do FRE → detecção automática do capítulo 7 → parsing ao vivo → exibição da composição do Conselho/Diretoria/Comitês com tempo no cargo calculado
 - Nome da empresa sugerido automaticamente a partir do cabeçalho do PDF (`extract_company_name`)
+- **Mini currículos** (adicionado 2026-08-18): abaixo da tabela de cada órgão, um `st.expander` por membro com o texto de "Experiência Profissional" já extraído pelo parser (campo `experiencia_profissional`, existia desde o início mas não era exibido) + a profissão como legenda
 - Persistência simples em `data/dashboard_store.json` (gitignored — ver `.gitignore`, `*.json`) — trocar por banco de dados quando o BigQuery/CVM estiver resolvido
 - Visão geral comparando todas as empresas já processadas
 
