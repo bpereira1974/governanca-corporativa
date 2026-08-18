@@ -299,6 +299,30 @@ Diferente do capítulo 7 (tabelas estruturadas com colunas fixas), o **capítulo
 
 ---
 
+## Remuneração quantitativa — seção 8.2 do FRE (`parse_remuneracao_valores`, 2026-08-18)
+
+Complementa a extração qualitativa acima com dois aspectos **quantitativos**, pedidos pelo usuário: (a) composição % da remuneração total entre fixa/variável de curto prazo/variável de longo prazo, e (b) quadro com valores efetivos por órgão, estruturado pra permitir cálculo de % e de valor per capita.
+
+**Diferente do capítulo 8.1/8.4 (texto corrido), a seção 8.2 "Remuneração total por órgão" é uma tabela numérica com layout consistente** entre empresas (exigido pelo Ofício-Circular/Anual da CVM/SEP) — por isso a extração aqui é **posicional**, igual à técnica usada no capítulo 7, não uma triagem por palavra-chave.
+
+**O que extrai (`parse_remuneracao_valores`):**
+- Localiza a seção 8.2 (dentro do intervalo já achado por `find_remuneracao_page_range`) e identifica os blocos por exercício social (normalmente 3-4 anos: o corrente previsto + últimos 2-3 realizados)
+- Pra cada ano e cada órgão (Conselho de Administração, Diretoria Estatutária, Conselho Fiscal, Total): nº total de membros, nº de membros remunerados, e os componentes em R$ — salário/pró-labore, benefícios, participações em comitês, outros (fixos); bônus, participação de resultados, participação em reuniões, comissões, outros (variáveis); pós-emprego; cessação do cargo; remuneração baseada em ações; total
+- Números em formato BR (`5.942.498,78`) convertidos pra float (`_br_to_float`)
+- **Armadilha:** o rótulo "Outros" aparece 2x na tabela (uma vez em "Remuneração fixa anual", outra em "Remuneração variável") — resolvido pegando a 1ª e 2ª ocorrência na ordem em que aparecem no texto (`_parse_linhas_outros`). Outra armadilha: o rótulo "Baseada em ações **(incluindo** opções)" tem texto extra antes dos números (a continuação "opções)" quebra pra linha de baixo) — o gap entre rótulo e 1º número teve que virar `[^\d]*?` em vez de `\s+` estrito
+
+**Cálculos derivados (feitos no dashboard, não no parser — dados brutos ficam disponíveis pra qualquer recorte):**
+- (a) % = fixo/total, variável-curto/total, variável-longo/total, onde fixo = salário+benefícios+participações em comitês+outros(fixo); variável curto = bônus+participação de resultados+participação em reuniões+comissões+outros(variável); variável longo = remuneração baseada em ações
+- (b) per capita = total da remuneração ÷ **nº de membros remunerados** (não o total, que pode incluir gente que não recebeu nada — usar "total" super-diluiria a média)
+
+**Validado na Cyrela (4 exercícios: 2026 previsto, 2025, 2024, 2023):** Conselho de Administração = 100% fixo em todos os anos (bate com o texto da 8.1: "os membros do Conselho de Administração não farão jus ao recebimento de remuneração variável"); Diretoria Estatutária = ~24% fixo / ~76% variável curto prazo / 0% longo prazo em 2026, valores per capita na casa de R$ 5,75 milhões/ano — todos os valores conferidos manualmente contra o texto bruto do PDF, batendo exato.
+
+**Integração no dashboard:** dentro da aba "Remuneração", uma nova seção "Valores quantitativos" no topo (antes dos "Aspectos qualitativos"), com uma tabela de composição % e uma tabela de valores/per capita por órgão (Conselho e Diretoria), uma por exercício social. Testado no navegador.
+
+**Pendente:** testar contra BTG/Estapar/Even (PDFs precisam ser re-enviados) pra confirmar que o layout da tabela 8.2 é tão padronizado entre empresas quanto parece ser (é um formato exigido por ofício-circular da CVM, então a expectativa é alta, mas ainda não confirmada empiricamente como fizemos com o capítulo 7).
+
+---
+
 ## Status do ambiente local (atualizado 2026-07-03)
 
 - Repositório Git local inicializado, conectado ao remoto `https://github.com/bpereira1974/governanca-corporativa` (branch `main`). Push ainda não realizado — só local até confirmação explícita.

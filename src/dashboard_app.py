@@ -18,6 +18,7 @@ from src.fre_pdf_parser import (
     parse_administration_structure,
     extract_company_name,
     parse_remuneracao_qualitativa,
+    parse_remuneracao_valores,
 )
 from src.dashboard_store import load_companies, save_company, delete_company
 from src.utils.logging_utils import custom_log
@@ -69,6 +70,16 @@ def _processar_upload(uploaded_file, nome_empresa):
             )
             resultado["remuneracao"] = None
 
+        try:
+            resultado["remuneracao_valores"] = parse_remuneracao_valores(tmp_path)
+        except Exception as e:
+            custom_log(
+                msg=traceback.format_exception(e),
+                component="/dashboard_app/_processar_upload",
+                severity="WARNING",
+            )
+            resultado["remuneracao_valores"] = None
+
         save_company(nome_empresa, resultado)
         return resultado
     except Exception as e:
@@ -117,7 +128,86 @@ def _render_curriculos(pessoas):
             st.write(membro.get("experiencia_profissional") or "Currículo não disponível no FRE.")
 
 
-def _render_remuneracao(remuneracao):
+_ORGAOS_REMUNERACAO_LABELS = {
+    "conselho_administracao": "Conselho de Administração",
+    "diretoria_estatutaria": "Diretoria Estatutária",
+}
+
+
+def _linha_composicao(orgao_dados):
+    fixo = (
+        orgao_dados["salario_pro_labore"]
+        + orgao_dados["beneficios"]
+        + orgao_dados["participacoes_comites"]
+        + orgao_dados["outros_fixo"]
+    )
+    variavel_curto = (
+        orgao_dados["bonus"]
+        + orgao_dados["participacao_resultados"]
+        + orgao_dados["participacao_reunioes"]
+        + orgao_dados["comissoes"]
+        + orgao_dados["outros_variavel"]
+    )
+    variavel_longo = orgao_dados["baseada_acoes"]
+    total = orgao_dados["total_remuneracao"]
+    n_remunerados = orgao_dados["n_membros_remunerados"]
+    per_capita = (total / n_remunerados) if n_remunerados else None
+    return fixo, variavel_curto, variavel_longo, total, n_remunerados, per_capita
+
+
+def _render_remuneracao_valores(exercicios):
+    if not exercicios:
+        st.info(
+            "Não foi possível localizar/extrair a tabela de valores de remuneração "
+            "(seção 8.2) deste FRE."
+        )
+        return
+
+    for chave_orgao, label_orgao in _ORGAOS_REMUNERACAO_LABELS.items():
+        st.markdown(f"**{label_orgao}**")
+        linhas_pct = []
+        linhas_valores = []
+        for ex in exercicios:
+            orgao_dados = ex.get(chave_orgao)
+            if not orgao_dados:
+                continue
+            fixo, var_curto, var_longo, total, n_remunerados, per_capita = _linha_composicao(orgao_dados)
+            ano = ex["data_referencia"]
+            if total:
+                linhas_pct.append(
+                    {
+                        "Exercício": ano,
+                        "Fixa": f"{fixo / total:.1%}",
+                        "Variável curto prazo": f"{var_curto / total:.1%}",
+                        "Variável longo prazo (ações)": f"{var_longo / total:.1%}",
+                    }
+                )
+            linhas_valores.append(
+                {
+                    "Exercício": ano,
+                    "Fixa (R$)": fixo,
+                    "Variável curto prazo (R$)": var_curto,
+                    "Variável longo prazo (R$)": var_longo,
+                    "Total (R$)": total,
+                    "Nº remunerados": n_remunerados,
+                    "Per capita (R$)": round(per_capita, 2) if per_capita else None,
+                }
+            )
+        if linhas_pct:
+            st.caption("(a) Composição % da remuneração total")
+            st.dataframe(linhas_pct, width="stretch", hide_index=True)
+        if linhas_valores:
+            st.caption("(b) Valores efetivos (R$) e per capita")
+            st.dataframe(linhas_valores, width="stretch", hide_index=True)
+
+
+def _render_remuneracao(remuneracao, remuneracao_valores):
+    st.markdown("### Valores quantitativos")
+    _render_remuneracao_valores(remuneracao_valores)
+
+    st.divider()
+    st.markdown("### Aspectos qualitativos")
+
     if not remuneracao:
         st.info(
             "Não foi possível localizar/extrair a seção de remuneração (capítulo 8) "
@@ -245,7 +335,7 @@ def main():
             st.write("Comitês identificados: " + ", ".join(resumo["comites"]))
         _render_tabela_comites(dados["membros_comites"])
     with aba_remuneracao:
-        _render_remuneracao(dados.get("remuneracao"))
+        _render_remuneracao(dados.get("remuneracao"), dados.get("remuneracao_valores"))
 
     if len(companies) > 1:
         st.divider()

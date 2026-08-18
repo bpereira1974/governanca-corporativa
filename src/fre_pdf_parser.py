@@ -694,3 +694,133 @@ def parse_remuneracao_qualitativa(pdf_path, page_start=None, page_end=None):
             severity="CRITICAL",
         )
         raise
+
+
+# numero no formato BR: milhares separados por ponto, decimais por virgula
+# (ex: "5.942.498,78"); o grupo de milhares e' opcional (ex: "10,00")
+_BR_NUM = r"\d{1,3}(?:\.\d{3})*,\d{2}"
+
+_ANO_BLOCK_RE = re.compile(
+    r"Remuneração total (?:prevista para o|do) Exercício Social (?:corrente\s*)?(?:em\s*)?(\d{2}/\d{2}/\d{4})"
+)
+
+# rotulo da linha -> chave do campo; a ordem das 4 colunas e' sempre
+# Conselho de Administração, Diretoria Estatutária, Conselho Fiscal, Total
+_LINHAS_8_2 = [
+    ("n_total_membros", "Nº total de membros"),
+    ("n_membros_remunerados", "Nº de membros remunerados"),
+    ("salario_pro_labore", "Salário ou pró-labore"),
+    ("beneficios", "Benefícios direto e indireto"),
+    ("participacoes_comites", "Participações em comitês"),
+    ("bonus", "Bônus"),
+    ("participacao_resultados", "Participação de resultados"),
+    ("participacao_reunioes", "Participação em reuniões"),
+    ("comissoes", "Comissões"),
+    ("pos_emprego", "Pós-emprego"),
+    ("cessacao_cargo", "Cessação do cargo"),
+    ("baseada_acoes", "Baseada em ações"),
+    ("total_remuneracao", "Total da remuneração"),
+]
+
+_ORGAOS_8_2 = ["conselho_administracao", "diretoria_estatutaria", "conselho_fiscal", "total"]
+
+
+def _br_to_float(s):
+    return float(s.replace(".", "").replace(",", "."))
+
+
+def _parse_linha_valores(bloco_texto, rotulo):
+    r"""Busca uma linha de valores por rotulo (ex: 'Bônus') e retorna os 4
+    numeros que a seguem na mesma linha fisica (Conselho, Diretoria,
+    Conselho Fiscal, Total). Retorna None se o rotulo nao for encontrado ou
+    nao houver 4 numeros logo em seguida (o rotulo pode aparecer sozinho em
+    texto descritivo, ex: "Descrição de outras remunerações fixas"). O gap
+    entre o rotulo e o 1o numero e' [^\d]*? (nao so' espaco) pois alguns
+    rotulos tem texto extra antes dos valores, ex: "Baseada em ações
+    (incluindo" (o "opções)" continua na linha de baixo, fora do recorte)."""
+    padrao = re.compile(
+        re.escape(rotulo) + r"[^\d]*?(" + _BR_NUM + r")\s+(" + _BR_NUM + r")\s+(" + _BR_NUM + r")\s+(" + _BR_NUM + r")"
+    )
+    m = padrao.search(bloco_texto)
+    if not m:
+        return None
+    valores = [_br_to_float(g) for g in m.groups()]
+    return dict(zip(_ORGAOS_8_2, valores))
+
+
+def _parse_linhas_outros(bloco_texto):
+    """A linha 'Outros' aparece 2x no bloco (uma em 'Remuneração fixa
+    anual', outra em 'Remuneração variável') — retorna (outros_fixo,
+    outros_variavel) na ordem em que aparecem no texto."""
+    padrao = re.compile(
+        r"\bOutros\s+(" + _BR_NUM + r")\s+(" + _BR_NUM + r")\s+(" + _BR_NUM + r")\s+(" + _BR_NUM + r")"
+    )
+    matches = list(padrao.finditer(bloco_texto))
+    resultados = []
+    for m in matches[:2]:
+        valores = [_br_to_float(g) for g in m.groups()]
+        resultados.append(dict(zip(_ORGAOS_8_2, valores)))
+    while len(resultados) < 2:
+        resultados.append(None)
+    return resultados[0], resultados[1]
+
+
+def parse_remuneracao_valores(pdf_path, page_start=None, page_end=None):
+    """Extrai os valores efetivos de remuneração por órgão (seção 8.2 do
+    FRE), para os últimos exercícios sociais disponíveis (normalmente 3-4
+    anos, incluindo o exercício corrente previsto).
+
+    Diferente da seção 8.1/8.4 (texto corrido), a seção 8.2 e' uma tabela
+    numerica com layout consistente entre empresas (exigido pelo Ofício-
+    Circular/Anual da CVM/SEP), entao a extração aqui e' posicional (mesma
+    tecnica das tabelas do capítulo 7), nao uma triagem por palavra-chave.
+
+    Retorna uma lista de dicts, um por exercício social, cada um com os
+    valores brutos (R$) por órgão — fixos, variáveis (curto prazo) e
+    baseados em ações (longo prazo) — e a contagem de membros, prontos pra
+    quem for calcular % de composição ou valor per capita (dividir pelo nº
+    de membros remunerados, nao pelo total, pra media mais precisa).
+    """
+    try:
+        if page_start is None or page_end is None:
+            page_start, page_end = find_remuneracao_page_range(pdf_path)
+
+        text = extract_section_text(pdf_path, page_start, page_end)
+
+        secao_82 = _field(
+            r"8\.2 Remuneração total por órgão(.*?)(?:8\.3 Remuneração Variável|\Z)", text
+        ) or ""
+
+        blocos_ano = list(_ANO_BLOCK_RE.finditer(secao_82))
+        exercicios = []
+        for i, m in enumerate(blocos_ano):
+            fim = blocos_ano[i + 1].start() if i + 1 < len(blocos_ano) else len(secao_82)
+            bloco = secao_82[m.start():fim]
+
+            por_orgao = {orgao: {} for orgao in _ORGAOS_8_2}
+            for campo, rotulo in _LINHAS_8_2:
+                linha = _parse_linha_valores(bloco, rotulo)
+                if linha:
+                    for orgao in _ORGAOS_8_2:
+                        por_orgao[orgao][campo] = linha[orgao]
+
+            outros_fixo, outros_variavel = _parse_linhas_outros(bloco)
+            for orgao in _ORGAOS_8_2:
+                por_orgao[orgao]["outros_fixo"] = outros_fixo[orgao] if outros_fixo else None
+                por_orgao[orgao]["outros_variavel"] = outros_variavel[orgao] if outros_variavel else None
+
+            exercicios.append({"data_referencia": m.group(1), **por_orgao})
+
+        custom_log(
+            msg=f"Remuneração por órgão extraída para {len(exercicios)} exercício(s) sociais de {pdf_path}",
+            component="/fre_pdf_parser/parse_remuneracao_valores",
+            severity="INFO",
+        )
+        return exercicios
+    except Exception as e:
+        custom_log(
+            msg=traceback.format_exception(e),
+            component="/fre_pdf_parser/parse_remuneracao_valores",
+            severity="CRITICAL",
+        )
+        raise
