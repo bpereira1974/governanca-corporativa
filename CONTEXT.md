@@ -260,6 +260,8 @@ Validado nas 3 empresas: localizou corretamente o intervalo em todas, sem precis
 
 **Atualização (mesmo dia):** usuário testou o upload por conta própria pelo dashboard e processou uma 4ª empresa (**Even Construtora**) — confirmando que o fluxo de upload funciona de ponta a ponta na prática, não só simulado. Esse teste revelou mais um cargo que quebra em 2 linhas e não estava coberto: **"Vice Presidente [do] Conselho de Administração"** (abreviado "Vice Presidente Cons. de Administração" no PDF). Adicionado como reconstrução por texto fixo, igual ao "Presidente do Conselho de Administração". Cyrela e Even reprocessadas com o fix, ambas 100% dos cargos preenchidos corretamente.
 
+**Correção de segurança (2026-08-19):** ao revisar os exemplos de mini currículo pedidos pelo usuário, achamos que as reconstruções por texto fixo de "Presidente do..." e "Vice Presidente..." (`_extract_cargo_eletivo`) não verificavam a qual órgão pertencia o membro — rodavam igual pra Conselho, Diretoria e Conselho Fiscal. Isso é uma fragilidade real: um Diretor com título C-level tipo "Vice-Presidente Executivo" (comum em empresas grandes, não visto ainda nas 4 testadas) seria incorretamente rotulado como "Vice-Presidente do Conselho de Administração". Mesmo risco no fallback "Conselho de Administração (Efetivo/Suplente)". Corrigido: `_extract_cargo_eletivo` agora recebe o `orgao` e só aplica essas 3 reconstruções quando o órgão é (ou inclui) "Conselho de Administração". Testado sem regressão em Cyrela (22/22 cargos idênticos) e Even (Guibson Zaffari continua "Vice-Presidente do Conselho de Administração", corretamente, por ser mesmo do Conselho).
+
 ---
 
 ## Dashboard de Governança (`src/dashboard_app.py`, iniciado 2026-08-04)

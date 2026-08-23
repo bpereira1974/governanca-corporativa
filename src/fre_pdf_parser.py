@@ -174,7 +174,7 @@ _ORGAO_ROW_START_RE = re.compile(
 _CARGO_KEYWORDS_ORGAO = ["C.F.", "Conselho de Adm", "Outros Diretores", "Diretor"]
 
 
-def _extract_cargo_eletivo(row_text):
+def _extract_cargo_eletivo(row_text, orgao=None):
     """Extrai o texto da coluna 'Cargo eletivo ocupado' de uma linha da
     tabela 'Orgaos da Administracao'.
 
@@ -194,10 +194,13 @@ def _extract_cargo_eletivo(row_text):
     # "Presidente do Conselho de Administração" e "Vice Presidente Cons. de
     # Administração" sempre quebram em varias linhas fisicas (o cargo mais
     # o proprio nome do orgao de novo), entao sao reconstruidos por texto
-    # fixo em vez de recorte posicional
-    if "Presidente do" in search_text:
+    # fixo em vez de recorte posicional. Restrito a membros do Conselho de
+    # Administração: um Diretor com titulo "Vice-Presidente Executivo" (C-
+    # level, nao ligado ao Conselho) nao deve ser confundido com isso.
+    eh_conselho = bool(orgao) and "Conselho de Administração" in orgao
+    if eh_conselho and "Presidente do" in search_text:
         return "Presidente do Conselho de Administração"
-    if "Vice Presidente" in search_text:
+    if eh_conselho and "Vice Presidente" in search_text:
         return "Vice-Presidente do Conselho de Administração"
 
     for keyword in _CARGO_KEYWORDS_ORGAO:
@@ -214,10 +217,14 @@ def _extract_cargo_eletivo(row_text):
     # "Conselho de Administração (Efetivo)" grafado por extenso, que quebra
     # em varias linhas do mesmo jeito que o proprio nome do orgao — sem dar
     # pra recortar por posicao, mas o marcador "(Efetivo)"/"(Suplente)"
-    # sobrevive intacto em alguma linha da tabela
-    marker = re.search(r"\((Efetivo|Suplente)\)", row_text)
-    if marker:
-        return f"Conselho de Administração ({marker.group(1)})"
+    # sobrevive intacto em alguma linha da tabela. Restrito ao Conselho pelo
+    # mesmo motivo dos casos acima — o marcador sozinho nao identifica o
+    # orgao, e um Diretor tambem pode ter "(Efetivo)" em texto de outra
+    # coluna que vazou pra dentro da linha.
+    if eh_conselho:
+        marker = re.search(r"\((Efetivo|Suplente)\)", row_text)
+        if marker:
+            return f"Conselho de Administração ({marker.group(1)})"
     return None
 
 
@@ -257,7 +264,7 @@ def _parse_orgaos(block):
 
         dates = re.findall(r"\d{2}/\d{2}/\d{4}", row_text)
         eleito_pelo_controlador = _field(r"\b(Sim|Não)\b", row_text)
-        cargo_hint = _extract_cargo_eletivo(row_text)
+        cargo_hint = _extract_cargo_eletivo(row_text, orgao)
 
         orgaos.append(
             {
