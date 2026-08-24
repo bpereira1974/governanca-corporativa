@@ -729,44 +729,59 @@ _LINHAS_8_2 = [
     ("total_remuneracao", "Total da remuneração"),
 ]
 
-_ORGAOS_8_2 = ["conselho_administracao", "diretoria_estatutaria", "conselho_fiscal", "total"]
+_ORGAOS_8_2_COMPLETO = ["conselho_administracao", "diretoria_estatutaria", "conselho_fiscal", "total"]
+_ORGAOS_8_2_SEM_CONSELHO_FISCAL = ["conselho_administracao", "diretoria_estatutaria", "total"]
 
 
 def _br_to_float(s):
     return float(s.replace(".", "").replace(",", "."))
 
 
-def _parse_linha_valores(bloco_texto, rotulo):
-    r"""Busca uma linha de valores por rotulo (ex: 'Bônus') e retorna os 4
-    numeros que a seguem na mesma linha fisica (Conselho, Diretoria,
-    Conselho Fiscal, Total). Retorna None se o rotulo nao for encontrado ou
-    nao houver 4 numeros logo em seguida (o rotulo pode aparecer sozinho em
-    texto descritivo, ex: "Descrição de outras remunerações fixas"). O gap
-    entre o rotulo e o 1o numero e' [^\d]*? (nao so' espaco) pois alguns
-    rotulos tem texto extra antes dos valores, ex: "Baseada em ações
-    (incluindo" (o "opções)" continua na linha de baixo, fora do recorte)."""
-    padrao = re.compile(
-        re.escape(rotulo) + r"[^\d]*?(" + _BR_NUM + r")\s+(" + _BR_NUM + r")\s+(" + _BR_NUM + r")\s+(" + _BR_NUM + r")"
-    )
+def _detectar_colunas_8_2(bloco_texto):
+    """Detecta quantas colunas de valores a tabela realmente tem nesse
+    bloco/ano. Quando a empresa nao tem Conselho Fiscal instalado, essa
+    coluna fica totalmente vazia (nem "0,00" aparece — visto na Even),
+    reduzindo de 4 pra 3 numeros por linha, em vez de so' zerar o valor.
+    Usa a linha 'Nº total de membros' (sempre presente) como referencia
+    pra contar quantos numeros de fato aparecem."""
+    m = re.search(r"Nº total de membros\s+((?:" + _BR_NUM + r"\s*){2,4})", bloco_texto)
+    if not m:
+        return _ORGAOS_8_2_COMPLETO
+    n = len(re.findall(_BR_NUM, m.group(1)))
+    return _ORGAOS_8_2_SEM_CONSELHO_FISCAL if n == 3 else _ORGAOS_8_2_COMPLETO
+
+
+def _parse_linha_valores(bloco_texto, rotulo, orgaos_colunas):
+    r"""Busca uma linha de valores por rotulo (ex: 'Bônus') e retorna os
+    numeros que a seguem na mesma linha fisica, um por coluna de orgao
+    presente (ver _detectar_colunas_8_2 — normalmente Conselho, Diretoria,
+    Conselho Fiscal, Total, mas pode faltar o Conselho Fiscal). Retorna
+    None se o rotulo nao for encontrado ou nao houver numeros suficientes
+    logo em seguida (o rotulo pode aparecer sozinho em texto descritivo,
+    ex: "Descrição de outras remunerações fixas"). O gap entre o rotulo e
+    o 1o numero e' [^\d]*? (nao so' espaco) pois alguns rotulos tem texto
+    extra antes dos valores, ex: "Baseada em ações (incluindo" (o
+    "opções)" continua na linha de baixo, fora do recorte)."""
+    partes = [r"(" + _BR_NUM + r")"] * len(orgaos_colunas)
+    padrao = re.compile(re.escape(rotulo) + r"[^\d]*?" + r"\s+".join(partes))
     m = padrao.search(bloco_texto)
     if not m:
         return None
     valores = [_br_to_float(g) for g in m.groups()]
-    return dict(zip(_ORGAOS_8_2, valores))
+    return dict(zip(orgaos_colunas, valores))
 
 
-def _parse_linhas_outros(bloco_texto):
+def _parse_linhas_outros(bloco_texto, orgaos_colunas):
     """A linha 'Outros' aparece 2x no bloco (uma em 'Remuneração fixa
     anual', outra em 'Remuneração variável') — retorna (outros_fixo,
     outros_variavel) na ordem em que aparecem no texto."""
-    padrao = re.compile(
-        r"\bOutros\s+(" + _BR_NUM + r")\s+(" + _BR_NUM + r")\s+(" + _BR_NUM + r")\s+(" + _BR_NUM + r")"
-    )
+    partes = [r"(" + _BR_NUM + r")"] * len(orgaos_colunas)
+    padrao = re.compile(r"\bOutros\s+" + r"\s+".join(partes))
     matches = list(padrao.finditer(bloco_texto))
     resultados = []
     for m in matches[:2]:
         valores = [_br_to_float(g) for g in m.groups()]
-        resultados.append(dict(zip(_ORGAOS_8_2, valores)))
+        resultados.append(dict(zip(orgaos_colunas, valores)))
     while len(resultados) < 2:
         resultados.append(None)
     return resultados[0], resultados[1]
@@ -803,16 +818,17 @@ def parse_remuneracao_valores(pdf_path, page_start=None, page_end=None):
         for i, m in enumerate(blocos_ano):
             fim = blocos_ano[i + 1].start() if i + 1 < len(blocos_ano) else len(secao_82)
             bloco = secao_82[m.start():fim]
+            orgaos_colunas = _detectar_colunas_8_2(bloco)
 
-            por_orgao = {orgao: {} for orgao in _ORGAOS_8_2}
+            por_orgao = {orgao: {} for orgao in orgaos_colunas}
             for campo, rotulo in _LINHAS_8_2:
-                linha = _parse_linha_valores(bloco, rotulo)
+                linha = _parse_linha_valores(bloco, rotulo, orgaos_colunas)
                 if linha:
-                    for orgao in _ORGAOS_8_2:
+                    for orgao in orgaos_colunas:
                         por_orgao[orgao][campo] = linha[orgao]
 
-            outros_fixo, outros_variavel = _parse_linhas_outros(bloco)
-            for orgao in _ORGAOS_8_2:
+            outros_fixo, outros_variavel = _parse_linhas_outros(bloco, orgaos_colunas)
+            for orgao in orgaos_colunas:
                 por_orgao[orgao]["outros_fixo"] = outros_fixo[orgao] if outros_fixo else None
                 por_orgao[orgao]["outros_variavel"] = outros_variavel[orgao] if outros_variavel else None
 
@@ -828,6 +844,192 @@ def parse_remuneracao_valores(pdf_path, page_start=None, page_end=None):
         custom_log(
             msg=traceback.format_exception(e),
             component="/fre_pdf_parser/parse_remuneracao_valores",
+            severity="CRITICAL",
+        )
+        raise
+
+
+_SECAO_8_15_START_RE = re.compile(r"8\.15\s+Remuneração")
+_SECAO_8_16_START_RE = re.compile(r"^\s*8\.16\b", re.MULTILINE)
+
+# ordem canonica dos blocos de orgao na tabela 8.15 (mesma ordem vista em
+# 8.1/8.2/8.3); uma empresa sem Conselho Fiscal instalado pode nao ter esse
+# bloco, entao a presenca de cada rotulo e' checada, nao assumida
+_ORGAO_BLOCOS_8_15 = [
+    ("Diretoria Estatutária", "diretoria_estatutaria"),
+    ("Conselho de Administração", "conselho_administracao"),
+    ("Conselho Fiscal", "conselho_fiscal"),
+]
+
+# numero BR tolerante a typo: aceita tanto "5.942.498,78" (correto) quanto
+# "9.00" (visto na pratica em vez de "9,00") — o separador decimal pode ser
+# virgula OU ponto, desde que seguido de exatamente 2 digitos no final
+_NUM_LOOSE = r"\d{1,3}(?:[.,]\d{3})*[.,]\d{2}"
+
+
+def _br_to_float_loose(s):
+    """Converte numero BR pra float, tolerando o separador decimal errado
+    (ponto em vez de virgula). O ultimo separador antes dos 2 digitos
+    finais e' sempre tratado como decimal; qualquer outro e' separador de
+    milhares e e' descartado."""
+    s = re.sub(r"[.,](\d{2})$", r"§\1", s)
+    s = s.replace(".", "").replace(",", "")
+    s = s.replace("§", ".")
+    return float(s)
+
+
+def find_remuneracao_extremos_page_range(pdf_path):
+    """Localiza as paginas da seção 8.15 (Remuneração mínima, média e
+    máxima) do FRE. Mesma tecnica de find_chapter7_page_range."""
+    try:
+        start_page = None
+        end_page = None
+        with pdfplumber.open(pdf_path) as pdf:
+            for i, page in enumerate(pdf.pages):
+                text = page.extract_text() or ""
+                lines = [l for l in text.split("\n") if l.strip()]
+                header = lines[1] if len(lines) > 1 else ""
+                if start_page is None:
+                    if _SECAO_8_15_START_RE.match(header.strip()):
+                        start_page = i + 1
+                    continue
+                if _SECAO_8_16_START_RE.match(header.strip()):
+                    end_page = i
+                    break
+
+        if start_page is None:
+            raise ValueError("Não foi possível localizar a seção 8.15 (remuneração mín/méd/máx) neste PDF")
+        if end_page is None:
+            end_page = start_page + 5
+
+        custom_log(
+            msg=f"Seção 8.15 localizada nas páginas {start_page}-{end_page} de {pdf_path}",
+            component="/fre_pdf_parser/find_remuneracao_extremos_page_range",
+            severity="INFO",
+        )
+        return start_page, end_page
+    except Exception as e:
+        custom_log(
+            msg=traceback.format_exception(e),
+            component="/fre_pdf_parser/find_remuneracao_extremos_page_range",
+            severity="CRITICAL",
+        )
+        raise
+
+
+def _detectar_orgaos_e_anos_8_15(texto):
+    """Detecta quais blocos de orgao estao presentes na tabela (um deles,
+    normalmente Conselho Fiscal, pode nao existir se a empresa nao tiver
+    esse orgao instalado) e a lista de anos (exercicios sociais) reportada
+    — ambos a partir do cabecalho da tabela, nao assumidos por posicao."""
+    linhas = texto.split("\n")
+    idx_cabecalho = next(
+        (i for i, l in enumerate(linhas) if any(nome in l for nome, _ in _ORGAO_BLOCOS_8_15)), None
+    )
+    if idx_cabecalho is None:
+        return [], []
+
+    linha_orgaos = linhas[idx_cabecalho]
+    orgaos_presentes = [(nome, chave) for nome, chave in _ORGAO_BLOCOS_8_15 if nome in linha_orgaos]
+
+    anos = []
+    for l in linhas[idx_cabecalho + 1 : idx_cabecalho + 5]:
+        encontrados = re.findall(r"\d{2}/\d{2}/\d{4}", l)
+        if encontrados:
+            anos = encontrados
+            break
+
+    return orgaos_presentes, anos
+
+
+def _parse_linha_extremos(texto, rotulo_re, ocorrencia, n_valores):
+    """Busca a rotulo_re-esima ocorrencia (indice 0) de um rotulo e extrai
+    os n_valores numeros que aparecem na mesma linha fisica (os valores da
+    tabela 8.15 sempre ficam na 1a linha do rotulo, mesmo quando o rotulo
+    em si quebra pra uma 2a linha, ex: 'Nº de membros\\nremunerados')."""
+    matches = list(rotulo_re.finditer(texto))
+    if ocorrencia >= len(matches):
+        return None
+    m = matches[ocorrencia]
+    fim_linha = texto.find("\n", m.end())
+    fim_linha = fim_linha if fim_linha != -1 else len(texto)
+    trecho = texto[m.end():fim_linha]
+    numeros = re.findall(_NUM_LOOSE, trecho)
+    if len(numeros) < n_valores:
+        return None
+    return [_br_to_float_loose(x) for x in numeros[:n_valores]]
+
+
+_ROTULO_N_MEMBROS_8_15 = re.compile(r"Nº de membros")
+_ROTULO_MAIOR_8_15 = re.compile(r"Valor da maior")
+_ROTULO_MENOR_8_15 = re.compile(r"Valor da menor")
+_ROTULO_MEDIO_8_15 = re.compile(r"Valor médio")
+
+
+def parse_remuneracao_extremos(pdf_path, page_start=None, page_end=None):
+    """Extrai a maior, menor e média remuneração individual por órgão e
+    por exercício social (seção 8.15 do FRE), junto com o número de
+    membros — permitindo calcular a razão maior/menor como indicador de
+    dispersão da remuneração dentro de cada órgão.
+
+    Retorna um dict {orgao: [{"ano", "n_membros", "n_membros_remunerados",
+    "maior", "menor", "media", "razao_maior_menor"}, ...]}. "razao_maior_
+    menor" e' None quando a menor remuneração e' 0 (divisão indefinida).
+    """
+    try:
+        if page_start is None or page_end is None:
+            page_start, page_end = find_remuneracao_extremos_page_range(pdf_path)
+
+        texto = extract_section_text(pdf_path, page_start, page_end)
+        secao = _field(r"8\.15 Remuneração(.*?)(?:8\.16|\Z)", texto) or texto
+
+        orgaos_presentes, anos = _detectar_orgaos_e_anos_8_15(secao)
+        if not orgaos_presentes or not anos:
+            raise ValueError("Não foi possível reconhecer o cabeçalho da tabela 8.15 (órgãos/anos)")
+
+        n_orgaos = len(orgaos_presentes)
+        n_anos = len(anos) // n_orgaos if n_orgaos else 0
+        total_esperado = n_orgaos * n_anos
+
+        n_total = _parse_linha_extremos(secao, _ROTULO_N_MEMBROS_8_15, 0, total_esperado)
+        n_remunerados = _parse_linha_extremos(secao, _ROTULO_N_MEMBROS_8_15, 1, total_esperado)
+        maior = _parse_linha_extremos(secao, _ROTULO_MAIOR_8_15, 0, total_esperado)
+        menor = _parse_linha_extremos(secao, _ROTULO_MENOR_8_15, 0, total_esperado)
+        media = _parse_linha_extremos(secao, _ROTULO_MEDIO_8_15, 0, total_esperado)
+
+        resultado = {chave: [] for _, chave in orgaos_presentes}
+        for i, (_, chave) in enumerate(orgaos_presentes):
+            for j, ano in enumerate(anos[i * n_anos : (i + 1) * n_anos]):
+                idx = i * n_anos + j
+                valor_maior = maior[idx] if maior else None
+                valor_menor = menor[idx] if menor else None
+                razao = (
+                    round(valor_maior / valor_menor, 2)
+                    if valor_maior is not None and valor_menor
+                    else None
+                )
+                resultado[chave].append(
+                    {
+                        "ano": ano,
+                        "n_membros": n_total[idx] if n_total else None,
+                        "n_membros_remunerados": n_remunerados[idx] if n_remunerados else None,
+                        "maior": valor_maior,
+                        "menor": valor_menor,
+                        "media": media[idx] if media else None,
+                        "razao_maior_menor": razao,
+                    }
+                )
+
+        custom_log(
+            msg=f"Remuneração mín/méd/máx extraída para órgãos {[c for _, c in orgaos_presentes]} de {pdf_path}",
+            component="/fre_pdf_parser/parse_remuneracao_extremos",
+            severity="INFO",
+        )
+        return resultado
+    except Exception as e:
+        custom_log(
+            msg=traceback.format_exception(e),
+            component="/fre_pdf_parser/parse_remuneracao_extremos",
             severity="CRITICAL",
         )
         raise

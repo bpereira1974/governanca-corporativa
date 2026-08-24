@@ -19,6 +19,7 @@ from src.fre_pdf_parser import (
     extract_company_name,
     parse_remuneracao_qualitativa,
     parse_remuneracao_valores,
+    parse_remuneracao_extremos,
 )
 from src.dashboard_store import load_companies, save_company, delete_company
 from src.utils.logging_utils import custom_log
@@ -80,6 +81,16 @@ def _processar_upload(uploaded_file, nome_empresa):
             )
             resultado["remuneracao_valores"] = None
 
+        try:
+            resultado["remuneracao_extremos"] = parse_remuneracao_extremos(tmp_path)
+        except Exception as e:
+            custom_log(
+                msg=traceback.format_exception(e),
+                component="/dashboard_app/_processar_upload",
+                severity="WARNING",
+            )
+            resultado["remuneracao_extremos"] = None
+
         save_company(nome_empresa, resultado)
         return resultado
     except Exception as e:
@@ -135,23 +146,18 @@ _ORGAOS_REMUNERACAO_LABELS = {
 
 
 def _linha_composicao(orgao_dados):
-    fixo = (
-        orgao_dados["salario_pro_labore"]
-        + orgao_dados["beneficios"]
-        + orgao_dados["participacoes_comites"]
-        + orgao_dados["outros_fixo"]
-    )
+    # .get(..., 0.0) em vez de indexacao direta: um rotulo pode nao ter
+    # sido reconhecido pro parser (ex: layout de tabela atipico numa
+    # empresa nova) sem que isso quebre o calculo dos demais campos
+    g = lambda campo: orgao_dados.get(campo) or 0.0
+    fixo = g("salario_pro_labore") + g("beneficios") + g("participacoes_comites") + g("outros_fixo")
     variavel_curto = (
-        orgao_dados["bonus"]
-        + orgao_dados["participacao_resultados"]
-        + orgao_dados["participacao_reunioes"]
-        + orgao_dados["comissoes"]
-        + orgao_dados["outros_variavel"]
+        g("bonus") + g("participacao_resultados") + g("participacao_reunioes") + g("comissoes") + g("outros_variavel")
     )
-    variavel_longo = orgao_dados["baseada_acoes"]
-    total = orgao_dados["total_remuneracao"]
-    n_remunerados = orgao_dados["n_membros_remunerados"]
-    per_capita = (total / n_remunerados) if n_remunerados else None
+    variavel_longo = g("baseada_acoes")
+    total = orgao_dados.get("total_remuneracao")
+    n_remunerados = orgao_dados.get("n_membros_remunerados")
+    per_capita = (total / n_remunerados) if total and n_remunerados else None
     return fixo, variavel_curto, variavel_longo, total, n_remunerados, per_capita
 
 
@@ -201,9 +207,44 @@ def _render_remuneracao_valores(exercicios):
             st.dataframe(linhas_valores, width="stretch", hide_index=True)
 
 
-def _render_remuneracao(remuneracao, remuneracao_valores):
+def _render_remuneracao_extremos(extremos):
+    if not extremos:
+        st.info(
+            "Não foi possível localizar/extrair a tabela de maior/menor/média "
+            "remuneração (seção 8.15) deste FRE."
+        )
+        return
+
+    for chave_orgao, label_orgao in _ORGAOS_REMUNERACAO_LABELS.items():
+        anos = extremos.get(chave_orgao)
+        if not anos:
+            continue
+        st.markdown(f"**{label_orgao}**")
+        linhas = [
+            {
+                "Exercício": a["ano"],
+                "Maior remuneração (R$)": a["maior"],
+                "Menor remuneração (R$)": a["menor"],
+                "Média (R$)": a["media"],
+                "Razão maior/menor": a["razao_maior_menor"],
+                "Nº remunerados": a["n_membros_remunerados"],
+            }
+            for a in anos
+        ]
+        st.dataframe(linhas, width="stretch", hide_index=True)
+
+
+def _render_remuneracao(remuneracao, remuneracao_valores, remuneracao_extremos):
     st.markdown("### Valores quantitativos")
     _render_remuneracao_valores(remuneracao_valores)
+
+    st.divider()
+    st.markdown("### Maior x menor remuneração individual")
+    st.caption(
+        "Razão maior/menor como indicador de dispersão da remuneração dentro do órgão "
+        "(seção 8.15 do FRE)."
+    )
+    _render_remuneracao_extremos(remuneracao_extremos)
 
     st.divider()
     st.markdown("### Aspectos qualitativos")
@@ -335,7 +376,11 @@ def main():
             st.write("Comitês identificados: " + ", ".join(resumo["comites"]))
         _render_tabela_comites(dados["membros_comites"])
     with aba_remuneracao:
-        _render_remuneracao(dados.get("remuneracao"), dados.get("remuneracao_valores"))
+        _render_remuneracao(
+            dados.get("remuneracao"),
+            dados.get("remuneracao_valores"),
+            dados.get("remuneracao_extremos"),
+        )
 
     if len(companies) > 1:
         st.divider()

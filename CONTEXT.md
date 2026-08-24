@@ -321,7 +321,28 @@ Complementa a extração qualitativa acima com dois aspectos **quantitativos**, 
 
 **Integração no dashboard:** dentro da aba "Remuneração", uma nova seção "Valores quantitativos" no topo (antes dos "Aspectos qualitativos"), com uma tabela de composição % e uma tabela de valores/per capita por órgão (Conselho e Diretoria), uma por exercício social. Testado no navegador.
 
-**Pendente:** testar contra BTG/Estapar/Even (PDFs precisam ser re-enviados) pra confirmar que o layout da tabela 8.2 é tão padronizado entre empresas quanto parece ser (é um formato exigido por ofício-circular da CVM, então a expectativa é alta, mas ainda não confirmada empiricamente como fizemos com o capítulo 7).
+**Atualização (2026-08-19) — bug real encontrado testando a Even:** a tabela 8.2 quebrou com `KeyError` pra Even porque ela **não tem Conselho Fiscal instalado** — nesse caso a coluna do Conselho Fiscal fica **totalmente vazia** (nem "0,00" aparece), reduzindo de 4 pra 3 números por linha. O parser exigia rigidamente 4 números, então NENHUMA linha batia e nenhum campo era populado (nem os de Conselho/Diretoria, que tinham dado normal). Corrigido: `_detectar_colunas_8_2()` conta quantos números aparecem na linha "Nº total de membros" (sempre presente) pra decidir dinamicamente se são 3 ou 4 colunas, por **bloco de ano individualmente** — achado interessante: a própria Even teve Conselho Fiscal instalado só em 2025, não nos outros 3 anos, então a detecção precisa ser por ano, não por empresa. `_parse_linha_valores`/`_parse_linhas_outros` agora recebem a lista de colunas presentes em vez de assumir 4 fixas. Validado sem regressão na Cyrela (sempre 4 colunas) e corrigindo a Even (3 ou 4 colunas dependendo do ano). O dashboard (`_linha_composicao`) também foi enrijecido pra usar `.get(campo, 0.0)` em vez de indexação direta, como proteção extra contra rótulos não reconhecidos no futuro.
+
+**Pendente:** testar contra BTG/Estapar (PDFs precisam ser re-enviados) pra validar mais casos reais.
+
+---
+
+## Maior x menor remuneração individual — seção 8.15 do FRE (`parse_remuneracao_extremos`, 2026-08-19)
+
+Pedido do usuário: maior e menor remuneração individual por órgão (Conselho e Diretoria), com a razão maior/menor como indicador de dispersão salarial dentro do órgão.
+
+**Seção 8.15 "Remuneração mínima, média e máxima"** — tabela numérica (mesma categoria de robustez que a 8.2/8.3, não texto corrido), com um layout diferente das outras: os blocos de órgão (Diretoria Estatutária, Conselho de Administração, Conselho Fiscal) ficam **lado a lado na mesma tabela** (não em blocos sequenciais por ano como a 8.2), cada um com 3 colunas de ano (ex: 31/12/2025, 31/12/2024, 31/12/2023).
+
+**O que extrai (`parse_remuneracao_extremos`):**
+- `find_remuneracao_extremos_page_range()` localiza a seção 8.15 (tipicamente 1 página só)
+- `_detectar_orgaos_e_anos_8_15()` identifica dinamicamente quais blocos de órgão estão presentes (uma empresa sem Conselho Fiscal instalado não teria esse bloco) e a lista de anos, a partir do cabeçalho real da tabela — não assume 3 órgãos fixos
+- Por órgão e ano: nº de membros (total e remunerados), valor da maior/menor/média remuneração individual, e a **razão maior/menor** calculada (`None` quando a menor é zero, pra evitar divisão por zero)
+- **Armadilha:** o rótulo "Nº de membros" aparece 2x (total e "remunerados", que quebra pra 2ª linha) — resolvido pegando a 1ª e 2ª ocorrência em ordem, mesma técnica da 8.2
+- **Typo real encontrado no PDF da Cyrela:** um valor usa ponto em vez de vírgula como decimal ("9.00" em vez de "9,00", pro nº de membros do Conselho em 2023) — o parser de número (`_br_to_float_loose`) foi feito tolerante a isso desde o início (trata o separador antes dos 2 últimos dígitos como decimal, seja vírgula ou ponto), diferente do `_br_to_float` mais rígido usado na 8.2
+
+**Validado na Cyrela (3 exercícios sociais):** todos os valores conferidos manualmente contra o texto do PDF, batendo exato — Diretoria 2025: maior R$10,2M / menor R$1,6M / razão 6,22x; Conselho 2025: maior R$2,1M / menor R$297k / razão 7,07x. Testado também na Even sem erros (estrutura de órgãos diferente da Cyrela).
+
+**Integração no dashboard:** nova seção "Maior x menor remuneração individual" na aba Remuneração, com uma tabela por órgão (Conselho e Diretoria) mostrando maior/menor/média/razão por exercício social.
 
 ---
 
