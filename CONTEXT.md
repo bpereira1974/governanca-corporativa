@@ -346,11 +346,11 @@ Pedido do usuário: maior e menor remuneração individual por órgão (Conselho
 
 ---
 
-## Fatores de risco e contingências — capítulo 4 do FRE (`parse_principais_fatores_risco`, 2026-09-04)
+## Fatores de risco e contingências — capítulo 4 do FRE (`parse_principais_fatores_risco`, `parse_contingencias`, 2026-09-04)
 
 Pedido do usuário: organizar e avaliar (a) os 5 principais fatores de risco, (b) as principais contingências e sua natureza, e (c) a quantificação das contingências com possibilidade de perda possível.
 
-**Escopo desta rodada: só o item (a).** O único PDF de teste disponível (Cyrela, versão atualizada "Versão 6") não tinha nenhuma contingência relevante reportada nas seções 4.4-4.7 (todas negativas/boilerplate) — sem um exemplo real, o risco de supor uma estrutura errada era alto (prática já estabelecida neste projeto: nunca adivinhar estrutura de documento sem inspeção real). Perguntado ao usuário como proceder, a decisão explícita foi **prosseguir só com (a) por enquanto**, deixando (b)/(c) pendentes até haver um FRE real com contingências para validar contra.
+**Primeira rodada: só o item (a).** O único PDF de teste disponível (Cyrela, versão atualizada "Versão 6") não tinha nenhuma contingência relevante reportada nas seções 4.4-4.7 (todas negativas/boilerplate) — sem um exemplo real, o risco de supor uma estrutura errada era alto (prática já estabelecida neste projeto: nunca adivinhar estrutura de documento sem inspeção real). Perguntado ao usuário como proceder, a decisão explícita foi **prosseguir só com (a) por enquanto**, deixando (b)/(c) pendentes até haver um FRE real com contingências para validar contra.
 
 **O que extrai (`parse_principais_fatores_risco`):**
 - **Seção 4.2 "Indicação dos 5 (cinco) principais fatores de risco"** — a própria Companhia escolhe e ordena esses 5 dentre a lista mais longa e detalhada da seção 4.1 (não extraída aqui; a 4.2 já é o resumo priorizado que a Companhia entrega)
@@ -358,11 +358,28 @@ Pedido do usuário: organizar e avaliar (a) os 5 principais fatores de risco, (b
 - A lista numerada (1. a 5.) é extraída via regex que tolera o texto de cada item quebrando em várias linhas físicas até o próximo número ou o fim da seção
 - Retorna lista de dicts `{"numero": int, "descricao": str}`, na ordem do documento — a ordem em si é um sinal de priorização dado pela própria Companhia
 
-**Validado na Cyrela:** 5 itens extraídos, texto batendo exato com a fonte (riscos de conjuntura econômica, atividade de incorporação imobiliária, cadeia de suprimentos, regulamentação, governança de SI/TI). Seção mais limpa extraída até agora no projeto — nenhuma armadilha de formatação encontrada.
+**Validado na Cyrela:** 5 itens extraídos, texto batendo exato com a fonte (riscos de conjuntura econômica, atividade de incorporação imobiliária, cadeia de suprimentos, regulamentação, governança de SI/TI).
 
-**Integração no dashboard:** nova aba "Fatores de Risco" por empresa, com os 5 itens em lista + placeholder explicando que a seção de Contingências ainda não foi implementada. Testado no navegador.
+**Integração no dashboard:** nova aba "Fatores de Risco" por empresa, com os 5 itens em lista.
 
-**Pendente (aguardando novo FRE real com contingências):** (b) identificar as principais contingências e sua natureza, (c) quantificar contingências com possibilidade de perda possível — capítulos 4.4-4.7 do FRE. Não iniciar sem um documento de teste com dados reais nessas seções.
+### Contingências — seções 4.4-4.7 (`parse_contingencias`, 2026-09-04)
+
+Segunda rodada, com um FRE real de contingências (Even, "Formulário de Referência 2026.pdf", sem versão anexa ao nome — não confundir com o `... even.pdf` mais antigo processado anteriormente, que foi substituído por este). Estrutura real encontrada (páginas 99-102 do PDF da Even):
+- **4.4 "Processos não sigilosos relevantes"** — texto corrido: valor total dos processos (independente da possibilidade de perda) por ano-base (ex: "R$ 368,202 milhões em 2025; R$ 354,988 milhões em 2024; R$ 188,865 milhões em 2023"), seguido de uma frase padrão negando processos "individualmente relevantes" — presente mesmo quando há valor agregado relevante, então **não pode ser usada sozinha como sinal negativo** (ver bug abaixo)
+- **4.5 "Valor total provisionado dos processos... descritos no item 4.4"** — a única tabela verdadeiramente estruturada do capítulo: natureza da contingência (Trabalhista/Fiscal/Cível/Administrativo/Total — nomes não hardcoded, detectados dinamicamente por linha "rótulo + 3 números") × probabilidade de perda (Provável/Possível/Remoto), valores em R$ milhões. É essa tabela que responde diretamente aos itens (b) natureza e (c) quantificação com perda "possível" (a própria coluna do meio)
+- **4.6 "Processos sigilosos relevantes"** e **4.7 "Outras contingências relevantes"** — texto corrido, tratados como triagem SIM/NÃO por palavra-chave (mesma abordagem de `parse_remuneracao_qualitativa`)
+
+**Dois bugs reais encontrados e corrigidos ao testar com dados de verdade:**
+1. **Vazamento de cabeçalho de seção no meio de frase:** a seção 4.2 da Even é bem mais longa que a da Cyrela (~3 páginas de descrições longas, vs. 1 página de frases curtas) — o cabeçalho de seção repetido no topo de cada página ("4.2 Indicação dos 5 (cinco) principais fatores de risco") caiu literalmente NO MEIO de duas frases que atravessavam a quebra de página (ex: "valores 4.2 Indicação dos 5 (cinco) principais fatores de risco mobiliários" em vez de "valores mobiliários"). Corrigido removendo essas repetições do texto após a extração de cada bloco (nunca antes — o cabeçalho é a própria âncora que localiza o início da seção). Essa mesma proteção foi aplicada preventivamente em `parse_contingencias`, mesmo sem ter sido observada lá ainda (seções 4.4-4.7 da Even couberam em 1 página cada), porque a causa raiz (seção mais longa em outra empresa) é genérica e recorrente.
+2. **Cifrão "$" desaparecendo do texto exibido no dashboard:** o Streamlit interpreta pares de "$" em `st.write`/`st.markdown` como delimitador de LaTeX — como o texto da 4.4 tem 3 ocorrências de "R$", o primeiro e o segundo "$" formavam um par e o texto entre eles era processado como fórmula matemática, sumindo com os símbolos "$" ("R$ 368,202... R$ 354,988" virava "R 368,202... R 354,988"). Corrigido trocando `st.write` por `st.text` (que não interpreta markdown/LaTeX) em todos os lugares que exibem texto bruto extraído do PDF: mini currículos, e os textos das seções 4.4/4.6/4.7 e 8.1/8.4.
+
+**Validado:** Even (5 naturezas na tabela 4.5, valores batendo exato com o PDF: Trabalhista 6,055/36,684/33,429, Fiscal 1,466/119,338/5,152, Cível 41,266/120,959/41,719, Administrativo 0/26,584/0, Total 48,788/239,202/80,302 — provável/possível/remoto, em R$ milhões); Cyrela reprocessada, sinal NÃO corretamente em 4.4/4.6/4.7 (nenhuma contingência relevante, como já sabíamos) e tabela 4.5 vazia (sem regressão).
+
+**Sinalização SIM/NÃO por palavra-chave (4.4/4.6/4.7) cobre as variações de redação já vistas:** "não há", "não havia", "não existe(m)", "não possui", "não aplicável", "não eram/era parte" — best-effort, não definitivo, sempre com o texto bruto disponível pra conferência humana. Para a 4.4 especificamente, a presença de um valor "R$ X milhões" no texto tem prioridade sobre a negativa (a frase "não há processos... individualmente relevantes" não significa ausência de contingência agregada).
+
+**Integração no dashboard:** dentro da aba "Fatores de Risco", nova seção "Contingências" com: sinal SIM/NÃO/A CONFIRMAR + texto extraído (4.4/4.6/4.7), e uma tabela por natureza (4.5). Testado no navegador (Even e Cyrela).
+
+**Pendente:** testar contra mais empresas (BTG/Estapar, PDFs não disponíveis localmente nesta sessão) para confirmar que a tabela 4.5 generaliza — é possível que nem toda companhia reporte essa tabela nesse formato exato (a Resolução CVM 80/22 não parece exigi-la como estrutura fixa, ao contrário da 8.2/8.15).
 
 ---
 

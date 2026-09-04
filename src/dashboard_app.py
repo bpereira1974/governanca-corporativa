@@ -21,6 +21,7 @@ from src.fre_pdf_parser import (
     parse_remuneracao_valores,
     parse_remuneracao_extremos,
     parse_principais_fatores_risco,
+    parse_contingencias,
 )
 from src.dashboard_store import load_companies, save_company, delete_company
 from src.utils.logging_utils import custom_log
@@ -102,6 +103,16 @@ def _processar_upload(uploaded_file, nome_empresa):
             )
             resultado["fatores_risco"] = None
 
+        try:
+            resultado["contingencias"] = parse_contingencias(tmp_path)
+        except Exception as e:
+            custom_log(
+                msg=traceback.format_exception(e),
+                component="/dashboard_app/_processar_upload",
+                severity="WARNING",
+            )
+            resultado["contingencias"] = None
+
         save_company(nome_empresa, resultado)
         return resultado
     except Exception as e:
@@ -147,7 +158,7 @@ def _render_curriculos(pessoas):
         with st.expander(titulo):
             if membro.get("profissao"):
                 st.caption(membro["profissao"])
-            st.write(membro.get("experiencia_profissional") or "Currículo não disponível no FRE.")
+            st.text(membro.get("experiencia_profissional") or "Currículo não disponível no FRE.")
 
 
 _ORGAOS_REMUNERACAO_LABELS = {
@@ -260,13 +271,71 @@ def _render_fatores_risco(fatores_risco):
         for item in fatores_risco:
             st.markdown(f"**{item['numero']}.** {item['descricao']}")
 
-    st.divider()
+
+def _render_sinal(sinal):
+    if sinal == "SIM":
+        st.success("SIM")
+    elif sinal == "NÃO":
+        st.error("NÃO")
+    else:
+        st.warning("A CONFIRMAR")
+
+
+def _render_contingencias(contingencias):
     st.markdown("### Contingências (processos judiciais/administrativos)")
-    st.info(
-        "Ainda não implementado — pendente de um FRE com contingências relevantes "
-        "reportadas (a Cyrela, única testada até agora, não tinha nenhuma na data-base "
-        "deste documento) para validar a estrutura real antes de escrever a extração."
+    st.caption(
+        "Seções 4.4/4.6/4.7 do FRE: sinalização por palavra-chave a partir de texto "
+        "corrido — confira o texto original antes de usar como resposta final. A tabela "
+        "da seção 4.5 (valor provisionado por natureza) é extraída de forma estruturada."
     )
+
+    if not contingencias:
+        st.info(
+            "Não foi possível localizar/extrair as seções 4.4-4.7 (contingências) deste "
+            "FRE — empresa processada antes dessa funcionalidade existir, ou o PDF tem "
+            "uma numeração de seção atípica."
+        )
+        return
+
+    processos = contingencias["processos_relevantes"]
+    st.markdown("**(a) Processos judiciais/administrativos/arbitrais relevantes (4.4)**")
+    _render_sinal(processos["sinal"])
+    with st.expander("Ver texto extraído (seção 4.4)"):
+        st.text(processos["texto"] or "Seção não encontrada.")
+
+    st.markdown("**(b)/(c) Valor provisionado por natureza e possibilidade de perda (4.5)**")
+    provisoes = contingencias["provisoes_por_natureza"]
+    if provisoes:
+        linhas = [
+            {
+                "Natureza": natureza,
+                "Provável (R$ M)": valores["provavel"],
+                "Possível (R$ M)": valores["possivel"],
+                "Remoto (R$ M)": valores["remoto"],
+            }
+            for natureza, valores in provisoes.items()
+        ]
+        st.dataframe(linhas, width="stretch", hide_index=True)
+    else:
+        st.info(
+            "Nenhuma tabela de provisões por natureza encontrada — a Companhia pode não "
+            "ter reportado valores provisionados, ou o layout da tabela nesse PDF difere "
+            "do padrão já validado."
+        )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        sigilosos = contingencias["processos_sigilosos"]
+        st.markdown("**Processos sigilosos relevantes (4.6)**")
+        _render_sinal(sigilosos["sinal"])
+        with st.expander("Ver texto extraído (seção 4.6)"):
+            st.text(sigilosos["texto"] or "Seção não encontrada.")
+    with col2:
+        outras = contingencias["outras_contingencias"]
+        st.markdown("**Outras contingências relevantes (4.7)**")
+        _render_sinal(outras["sinal"])
+        with st.expander("Ver texto extraído (seção 4.7)"):
+            st.text(outras["texto"] or "Seção não encontrada.")
 
 
 def _render_remuneracao(remuneracao, remuneracao_valores, remuneracao_extremos):
@@ -309,7 +378,7 @@ def _render_remuneracao(remuneracao, remuneracao_valores, remuneracao_extremos):
         else:
             st.error("NÃO — texto indica que não há plano vigente")
         with st.expander("Ver texto extraído (seção 8.4)"):
-            st.write(longo["texto_secao_8_4"] or "Seção não encontrada.")
+            st.text(longo["texto_secao_8_4"] or "Seção não encontrada.")
 
     with col2:
         st.markdown("**(b) Metas/indicadores na remuneração variável de curto prazo**")
@@ -318,7 +387,7 @@ def _render_remuneracao(remuneracao, remuneracao_valores, remuneracao_extremos):
         else:
             st.warning("A CONFIRMAR — nenhuma palavra-chave de meta/indicador encontrada")
         with st.expander("Ver texto extraído (seção 8.1)"):
-            st.write(curto["texto_secao_8_1"] or "Seção não encontrada.")
+            st.text(curto["texto_secao_8_1"] or "Seção não encontrada.")
 
 
 def _render_tabela_comites(membros_comites):
@@ -418,6 +487,8 @@ def main():
         )
     with aba_riscos:
         _render_fatores_risco(dados.get("fatores_risco"))
+        st.divider()
+        _render_contingencias(dados.get("contingencias"))
 
     if len(companies) > 1:
         st.divider()

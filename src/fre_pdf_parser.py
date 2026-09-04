@@ -1100,6 +1100,16 @@ def parse_principais_fatores_risco(pdf_path, page_start=None, page_end=None):
         secao = _field(
             r"4\.2 Indicação dos 5 \(cinco\) principais fatores de risco(.*?)(?:4\.3|\Z)", text
         ) or text
+        # quando a secao 4.2 ocupa varias paginas (visto na Even, cuja
+        # descricao de cada fator e' bem mais longa que a da Cyrela), o
+        # cabecalho de secao se repete no topo de cada pagina e pode cair no
+        # meio de uma frase que atravessa a quebra de pagina — remove essas
+        # repeticoes do corpo do texto antes de separar os itens
+        secao = re.sub(
+            r"4\.2\s+Indicação\s+dos\s+5\s*\(cinco\)\s+principais\s+fatores\s+de\s+risco",
+            " ",
+            secao,
+        )
 
         itens = []
         for m in _FATOR_RISCO_ITEM_RE.finditer(secao):
@@ -1119,6 +1129,215 @@ def parse_principais_fatores_risco(pdf_path, page_start=None, page_end=None):
         custom_log(
             msg=traceback.format_exception(e),
             component="/fre_pdf_parser/parse_principais_fatores_risco",
+            severity="CRITICAL",
+        )
+        raise
+
+
+_SECAO_4_4_START_RE = re.compile(r"^\s*4\.4\b", re.MULTILINE)
+_SECAO_5_1_START_RE = re.compile(r"^\s*5\.1\b", re.MULTILINE)
+
+# linha da tabela da secao 4.5: um rotulo de natureza (Trabalhista, Fiscal,
+# Civel, Administrativo, Total, etc — nao hardcoded, qualquer palavra(s)
+# iniciada em maiuscula) seguido de 3 valores (Provavel, Possivel, Remoto)
+_LINHA_CONTINGENCIA_RE = re.compile(
+    r"^\s*([A-ZÀ-Ý][^\d\n]*?)\s+([\d.,]+)\s+([\d.,]+)\s+([\d.,]+)\s*$",
+    re.MULTILINE,
+)
+
+
+def _br_to_float_milhoes(s):
+    """Converte um numero da tabela da secao 4.5 (valores em R$ milhoes,
+    normalmente com 3 casas decimais) pra float. A mesma armadilha da 8.15
+    aparece aqui: o documento mistura '.' e ',' como separador decimal na
+    mesma tabela (ex: '0,00' e '26.584' na mesma linha) — tratamos sempre o
+    ULTIMO separador como decimal, e qualquer outro como milhar (descartado)."""
+    s = s.strip()
+    idx = max(s.rfind(","), s.rfind("."))
+    if idx == -1:
+        return float(s)
+    inteiro = re.sub(r"[.,]", "", s[:idx]) or "0"
+    decimal = s[idx + 1 :]
+    return float(f"{inteiro}.{decimal}")
+
+
+def find_contingencias_page_range(pdf_path):
+    """Localiza as paginas das seções 4.4-4.7 (processos/contingências) do
+    FRE. Mesma tecnica de find_chapter7_page_range."""
+    try:
+        start_page = None
+        end_page = None
+        with pdfplumber.open(pdf_path) as pdf:
+            for i, page in enumerate(pdf.pages):
+                text = page.extract_text() or ""
+                lines = [l for l in text.split("\n") if l.strip()]
+                header = lines[1] if len(lines) > 1 else ""
+                if start_page is None:
+                    if _SECAO_4_4_START_RE.match(header.strip()):
+                        start_page = i + 1
+                    continue
+                if _SECAO_5_1_START_RE.match(header.strip()):
+                    end_page = i
+                    break
+
+        if start_page is None:
+            raise ValueError("Não foi possível localizar a seção 4.4 (contingências) neste PDF")
+        if end_page is None:
+            end_page = start_page + 4
+
+        custom_log(
+            msg=f"Seções 4.4-4.7 localizadas nas páginas {start_page}-{end_page} de {pdf_path}",
+            component="/fre_pdf_parser/find_contingencias_page_range",
+            severity="INFO",
+        )
+        return start_page, end_page
+    except Exception as e:
+        custom_log(
+            msg=traceback.format_exception(e),
+            component="/fre_pdf_parser/find_contingencias_page_range",
+            severity="CRITICAL",
+        )
+        raise
+
+
+# negativa por palavra-chave: cobre as variacoes de redacao ja vistas nos
+# FREs testados ("não há", "não havia", "não existe(m)", "não possui",
+# "não aplicável", "não eram/era parte") — best-effort, nao definitivo
+# (mesma logica de parse_remuneracao_qualitativa)
+_NEGATIVA_CONTINGENCIA_RE = re.compile(
+    r"não\s+(há|havia|houve|existe\w*|possui\w*|aplicável|eram?\s+parte)", re.IGNORECASE
+)
+
+
+def _sinal_contingencia(texto):
+    """Sinalizacao simples SIM/NAO por palavra-chave, mesma abordagem usada
+    em parse_remuneracao_qualitativa — nao tenta ser definitivo, so' aponta
+    pro texto bruto pra leitura humana."""
+    if not texto:
+        return "A CONFIRMAR"
+    if _NEGATIVA_CONTINGENCIA_RE.search(texto):
+        return "NÃO"
+    return "SIM"
+
+
+def _sinal_processos_4_4(texto):
+    """Sinalizacao especifica pra secao 4.4: o texto quase sempre inclui uma
+    frase padrao negando processos 'individualmente relevantes' mesmo quando
+    ha' um valor agregado real e diferente de zero (visto na Even: R$368
+    milhões no agregado, mas nenhum processo isolado é 'relevante'). Por
+    isso, a presenca de um valor em R$ no texto tem prioridade sobre a
+    negativa — so' classifica como NAO quando nao ha' nenhum valor citado."""
+    if not texto:
+        return "A CONFIRMAR"
+    if re.search(r"R\$\s*[\d.,]+\s*milh", texto, re.IGNORECASE):
+        return "SIM"
+    if _NEGATIVA_CONTINGENCIA_RE.search(texto):
+        return "NÃO"
+    return "SIM"
+
+
+_CABECALHOS_4_4_4_7 = (
+    r"4\.4\s+Processos\s+não\s+sigilosos\s+relevantes",
+    r"4\.5\s+Valor\s+total\s+provisionado\s+dos\s+processos\s+não\s+sigilosos\s+relevantes",
+    r"4\.6\s+Processos\s+sigilosos\s+relevantes",
+    r"4\.7\s+Outras\s+contingências\s+relevantes",
+)
+
+
+def _remover_vazamento_cabecalho_4_4_4_7(texto):
+    """Remove repeticoes do cabecalho de secao que podem vazar pro meio de
+    uma frase quando a secao ocupa varias paginas (ver comentario em
+    parse_contingencias)."""
+    if not texto:
+        return texto
+    for cabecalho in _CABECALHOS_4_4_4_7:
+        texto = re.sub(cabecalho, " ", texto)
+    return texto
+
+
+def parse_contingencias(pdf_path, page_start=None, page_end=None):
+    """Extrai as seções 4.4-4.7 do FRE (processos judiciais/administrativos
+    e outras contingências).
+
+    Diferente da 4.2 (lista limpa) e da 8.2/8.15 (tabelas 100% padronizadas
+    pelo Ofício-Circular da CVM/SEP), as seções 4.4/4.6/4.7 são texto corrido
+    e a redação varia por empresa — por isso são retornadas como texto bruto
+    + sinalização SIM/NÃO por palavra-chave (mesma abordagem já usada em
+    parse_remuneracao_qualitativa), deixando a leitura final pro analista.
+
+    A seção 4.5 ("Valor total provisionado"), por outro lado, é uma tabela
+    numérica (natureza da contingência x probabilidade de perda) — essa é
+    extraída de forma estruturada, respondendo diretamente à natureza das
+    contingências e ao valor com possibilidade de perda "possível".
+
+    Retorna um dict:
+    {
+        "processos_relevantes": {"texto": str, "sinal": str},       # 4.4
+        "provisoes_por_natureza": {natureza: {"provavel", "possivel", "remoto"}},  # 4.5
+        "processos_sigilosos": {"texto": str, "sinal": str},        # 4.6
+        "outras_contingencias": {"texto": str, "sinal": str},       # 4.7
+    }
+    """
+    try:
+        if page_start is None or page_end is None:
+            page_start, page_end = find_contingencias_page_range(pdf_path)
+
+        text = extract_section_text(pdf_path, page_start, page_end)
+
+        texto_4_4 = _field(r"4\.4 Processos não sigilosos relevantes(.*?)(?:4\.5|\Z)", text)
+        texto_4_5 = _field(r"4\.5 Valor total provisionado.*?item 4\.4\.(.*?)(?:4\.6|\Z)", text)
+        texto_4_6 = _field(r"4\.6 Processos sigilosos relevantes(.*?)(?:4\.7|\Z)", text)
+        texto_4_7 = _field(r"4\.7 Outras contingências relevantes(.*?)\Z", text)
+
+        # protecao contra vazamento de cabecalho de secao repetido no meio de
+        # frase quando alguma dessas secoes ocupa varias paginas — mesmo
+        # problema real encontrado na secao 4.2 da Even (ver
+        # parse_principais_fatores_risco). Aplicada DEPOIS do _field() acima,
+        # nunca antes — o cabecalho e' a propria ancora que o _field usa pra
+        # achar o inicio de cada secao
+        texto_4_4 = _remover_vazamento_cabecalho_4_4_4_7(texto_4_4)
+        texto_4_5 = _remover_vazamento_cabecalho_4_4_4_7(texto_4_5)
+        texto_4_6 = _remover_vazamento_cabecalho_4_4_4_7(texto_4_6)
+        texto_4_7 = _remover_vazamento_cabecalho_4_4_4_7(texto_4_7)
+
+        provisoes_por_natureza = {}
+        if texto_4_5:
+            for m in _LINHA_CONTINGENCIA_RE.finditer(texto_4_5):
+                natureza = " ".join(m.group(1).split())
+                if not natureza:
+                    continue
+                provisoes_por_natureza[natureza] = {
+                    "provavel": _br_to_float_milhoes(m.group(2)),
+                    "possivel": _br_to_float_milhoes(m.group(3)),
+                    "remoto": _br_to_float_milhoes(m.group(4)),
+                }
+
+        resultado = {
+            "processos_relevantes": {
+                "texto": " ".join(texto_4_4.split()) if texto_4_4 else None,
+                "sinal": _sinal_processos_4_4(texto_4_4),
+            },
+            "provisoes_por_natureza": provisoes_por_natureza,
+            "processos_sigilosos": {
+                "texto": " ".join(texto_4_6.split()) if texto_4_6 else None,
+                "sinal": _sinal_contingencia(texto_4_6),
+            },
+            "outras_contingencias": {
+                "texto": " ".join(texto_4_7.split()) if texto_4_7 else None,
+                "sinal": _sinal_contingencia(texto_4_7),
+            },
+        }
+
+        custom_log(
+            msg=f"Contingências extraídas de {pdf_path}: {len(provisoes_por_natureza)} naturezas na tabela 4.5",
+            component="/fre_pdf_parser/parse_contingencias",
+            severity="INFO",
+        )
+        return resultado
+    except Exception as e:
+        custom_log(
+            msg=traceback.format_exception(e),
+            component="/fre_pdf_parser/parse_contingencias",
             severity="CRITICAL",
         )
         raise
