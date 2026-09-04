@@ -1033,3 +1033,92 @@ def parse_remuneracao_extremos(pdf_path, page_start=None, page_end=None):
             severity="CRITICAL",
         )
         raise
+
+
+_SECAO_4_2_START_RE = re.compile(r"4\.2\s+Indicação")
+_SECAO_4_3_START_RE = re.compile(r"^\s*4\.3\b", re.MULTILINE)
+
+# item de lista numerada ("1. Texto...", ate' "5. Texto..."), com o texto
+# podendo quebrar em varias linhas fisicas ate' o proximo numero ou o fim
+# da secao
+_FATOR_RISCO_ITEM_RE = re.compile(r"^\s*(\d)\.\s+(.+?)(?=^\s*\d\.\s+|\Z)", re.MULTILINE | re.DOTALL)
+
+
+def find_fatores_risco_page_range(pdf_path):
+    """Localiza as paginas da seção 4.2 (Indicação dos 5 principais
+    fatores de risco) do FRE. Mesma tecnica de find_chapter7_page_range."""
+    try:
+        start_page = None
+        end_page = None
+        with pdfplumber.open(pdf_path) as pdf:
+            for i, page in enumerate(pdf.pages):
+                text = page.extract_text() or ""
+                lines = [l for l in text.split("\n") if l.strip()]
+                header = lines[1] if len(lines) > 1 else ""
+                if start_page is None:
+                    if _SECAO_4_2_START_RE.match(header.strip()):
+                        start_page = i + 1
+                    continue
+                if _SECAO_4_3_START_RE.match(header.strip()):
+                    end_page = i
+                    break
+
+        if start_page is None:
+            raise ValueError("Não foi possível localizar a seção 4.2 (principais fatores de risco) neste PDF")
+        if end_page is None:
+            end_page = start_page + 2
+
+        custom_log(
+            msg=f"Seção 4.2 localizada nas páginas {start_page}-{end_page} de {pdf_path}",
+            component="/fre_pdf_parser/find_fatores_risco_page_range",
+            severity="INFO",
+        )
+        return start_page, end_page
+    except Exception as e:
+        custom_log(
+            msg=traceback.format_exception(e),
+            component="/fre_pdf_parser/find_fatores_risco_page_range",
+            severity="CRITICAL",
+        )
+        raise
+
+
+def parse_principais_fatores_risco(pdf_path, page_start=None, page_end=None):
+    """Extrai os 5 principais fatores de risco (seção 4.2 do FRE), como
+    lista numerada de texto — a Companhia escolhe e ordena esses 5 dentre
+    a lista mais longa e detalhada da seção 4.1 (não extraída aqui).
+
+    Retorna uma lista de dicts {"numero": int, "descricao": str}, na ordem
+    em que aparecem no documento (a ordem em si já é um sinal de
+    priorização dado pela própria Companhia).
+    """
+    try:
+        if page_start is None or page_end is None:
+            page_start, page_end = find_fatores_risco_page_range(pdf_path)
+
+        text = extract_section_text(pdf_path, page_start, page_end)
+        secao = _field(
+            r"4\.2 Indicação dos 5 \(cinco\) principais fatores de risco(.*?)(?:4\.3|\Z)", text
+        ) or text
+
+        itens = []
+        for m in _FATOR_RISCO_ITEM_RE.finditer(secao):
+            numero = int(m.group(1))
+            if not 1 <= numero <= 5:
+                continue
+            descricao = " ".join(m.group(2).split())
+            itens.append({"numero": numero, "descricao": descricao})
+
+        custom_log(
+            msg=f"{len(itens)} principais fatores de risco extraídos de {pdf_path}",
+            component="/fre_pdf_parser/parse_principais_fatores_risco",
+            severity="INFO",
+        )
+        return itens
+    except Exception as e:
+        custom_log(
+            msg=traceback.format_exception(e),
+            component="/fre_pdf_parser/parse_principais_fatores_risco",
+            severity="CRITICAL",
+        )
+        raise

@@ -346,6 +346,26 @@ Pedido do usuário: maior e menor remuneração individual por órgão (Conselho
 
 ---
 
+## Fatores de risco e contingências — capítulo 4 do FRE (`parse_principais_fatores_risco`, 2026-09-04)
+
+Pedido do usuário: organizar e avaliar (a) os 5 principais fatores de risco, (b) as principais contingências e sua natureza, e (c) a quantificação das contingências com possibilidade de perda possível.
+
+**Escopo desta rodada: só o item (a).** O único PDF de teste disponível (Cyrela, versão atualizada "Versão 6") não tinha nenhuma contingência relevante reportada nas seções 4.4-4.7 (todas negativas/boilerplate) — sem um exemplo real, o risco de supor uma estrutura errada era alto (prática já estabelecida neste projeto: nunca adivinhar estrutura de documento sem inspeção real). Perguntado ao usuário como proceder, a decisão explícita foi **prosseguir só com (a) por enquanto**, deixando (b)/(c) pendentes até haver um FRE real com contingências para validar contra.
+
+**O que extrai (`parse_principais_fatores_risco`):**
+- **Seção 4.2 "Indicação dos 5 (cinco) principais fatores de risco"** — a própria Companhia escolhe e ordena esses 5 dentre a lista mais longa e detalhada da seção 4.1 (não extraída aqui; a 4.2 já é o resumo priorizado que a Companhia entrega)
+- `find_fatores_risco_page_range()` localiza a seção (mesma técnica de sempre: cabeçalho de seção na 2ª linha de cada página), de "4.2" até "4.3"
+- A lista numerada (1. a 5.) é extraída via regex que tolera o texto de cada item quebrando em várias linhas físicas até o próximo número ou o fim da seção
+- Retorna lista de dicts `{"numero": int, "descricao": str}`, na ordem do documento — a ordem em si é um sinal de priorização dado pela própria Companhia
+
+**Validado na Cyrela:** 5 itens extraídos, texto batendo exato com a fonte (riscos de conjuntura econômica, atividade de incorporação imobiliária, cadeia de suprimentos, regulamentação, governança de SI/TI). Seção mais limpa extraída até agora no projeto — nenhuma armadilha de formatação encontrada.
+
+**Integração no dashboard:** nova aba "Fatores de Risco" por empresa, com os 5 itens em lista + placeholder explicando que a seção de Contingências ainda não foi implementada. Testado no navegador.
+
+**Pendente (aguardando novo FRE real com contingências):** (b) identificar as principais contingências e sua natureza, (c) quantificar contingências com possibilidade de perda possível — capítulos 4.4-4.7 do FRE. Não iniciar sem um documento de teste com dados reais nessas seções.
+
+---
+
 ## Status do ambiente local (atualizado 2026-07-03)
 
 - Repositório Git local inicializado, conectado ao remoto `https://github.com/bpereira1974/governanca-corporativa` (branch `main`). Push ainda não realizado — só local até confirmação explícita.

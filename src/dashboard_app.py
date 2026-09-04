@@ -20,6 +20,7 @@ from src.fre_pdf_parser import (
     parse_remuneracao_qualitativa,
     parse_remuneracao_valores,
     parse_remuneracao_extremos,
+    parse_principais_fatores_risco,
 )
 from src.dashboard_store import load_companies, save_company, delete_company
 from src.utils.logging_utils import custom_log
@@ -90,6 +91,16 @@ def _processar_upload(uploaded_file, nome_empresa):
                 severity="WARNING",
             )
             resultado["remuneracao_extremos"] = None
+
+        try:
+            resultado["fatores_risco"] = parse_principais_fatores_risco(tmp_path)
+        except Exception as e:
+            custom_log(
+                msg=traceback.format_exception(e),
+                component="/dashboard_app/_processar_upload",
+                severity="WARNING",
+            )
+            resultado["fatores_risco"] = None
 
         save_company(nome_empresa, resultado)
         return resultado
@@ -234,6 +245,30 @@ def _render_remuneracao_extremos(extremos):
         st.dataframe(linhas, width="stretch", hide_index=True)
 
 
+def _render_fatores_risco(fatores_risco):
+    st.markdown("### 5 principais fatores de risco")
+    st.caption(
+        "Extraído diretamente da seção 4.2 do FRE (a própria Companhia escolhe e ordena "
+        "esses 5 dentre a lista mais ampla da seção 4.1)."
+    )
+    if not fatores_risco:
+        st.info(
+            "Não foi possível localizar/extrair a seção 4.2 (principais fatores de risco) "
+            "deste FRE."
+        )
+    else:
+        for item in fatores_risco:
+            st.markdown(f"**{item['numero']}.** {item['descricao']}")
+
+    st.divider()
+    st.markdown("### Contingências (processos judiciais/administrativos)")
+    st.info(
+        "Ainda não implementado — pendente de um FRE com contingências relevantes "
+        "reportadas (a Cyrela, única testada até agora, não tinha nenhuma na data-base "
+        "deste documento) para validar a estrutura real antes de escrever a extração."
+    )
+
+
 def _render_remuneracao(remuneracao, remuneracao_valores, remuneracao_extremos):
     st.markdown("### Valores quantitativos")
     _render_remuneracao_valores(remuneracao_valores)
@@ -364,8 +399,8 @@ def main():
     col2.metric("Diretoria", resumo["n_membros_diretoria"])
     col3.metric("Comitês de assessoramento", resumo["n_comites"])
 
-    aba_conselho, aba_diretoria, aba_comites, aba_remuneracao = st.tabs(
-        ["Conselho de Administração", "Diretoria", "Comitês", "Remuneração"]
+    aba_conselho, aba_diretoria, aba_comites, aba_remuneracao, aba_riscos = st.tabs(
+        ["Conselho de Administração", "Diretoria", "Comitês", "Remuneração", "Fatores de Risco"]
     )
     with aba_conselho:
         _render_tabela_orgao(dados["membros"], "Conselho de Administração")
@@ -381,6 +416,8 @@ def main():
             dados.get("remuneracao_valores"),
             dados.get("remuneracao_extremos"),
         )
+    with aba_riscos:
+        _render_fatores_risco(dados.get("fatores_risco"))
 
     if len(companies) > 1:
         st.divider()
